@@ -1,0 +1,70 @@
+use borsh::{BorshDeserialize, BorshSerialize};
+use nusantara_core::transaction::Transaction;
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum TpuMessage {
+    Transaction(Transaction),
+    TransactionBatch(Vec<Transaction>),
+}
+
+impl TpuMessage {
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, String> {
+        borsh::to_vec(self).map_err(|e| e.to_string())
+    }
+
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        borsh::from_slice(bytes).map_err(|e| e.to_string())
+    }
+
+    pub fn transactions(&self) -> Vec<Transaction> {
+        match self {
+            Self::Transaction(tx) => vec![tx.clone()],
+            Self::TransactionBatch(txs) => txs.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nusantara_core::message::Message;
+    use nusantara_crypto::hash;
+
+    fn test_tx() -> Transaction {
+        let msg = Message {
+            num_required_signatures: 1,
+            num_readonly_signed: 0,
+            num_readonly_unsigned: 1,
+            account_keys: vec![hash(b"payer"), hash(b"program")],
+            recent_blockhash: hash(b"blockhash"),
+            instructions: vec![],
+        };
+        Transaction::new(msg)
+    }
+
+    #[test]
+    fn single_tx_roundtrip() {
+        let msg = TpuMessage::Transaction(test_tx());
+        let bytes = msg.serialize_to_bytes().unwrap();
+        let decoded = TpuMessage::deserialize_from_bytes(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn batch_roundtrip() {
+        let msg = TpuMessage::TransactionBatch(vec![test_tx(), test_tx()]);
+        let bytes = msg.serialize_to_bytes().unwrap();
+        let decoded = TpuMessage::deserialize_from_bytes(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn transactions_extraction() {
+        let tx = test_tx();
+        let msg = TpuMessage::Transaction(tx.clone());
+        assert_eq!(msg.transactions().len(), 1);
+
+        let batch = TpuMessage::TransactionBatch(vec![tx.clone(), tx]);
+        assert_eq!(batch.transactions().len(), 2);
+    }
+}

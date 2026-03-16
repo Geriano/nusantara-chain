@@ -1,0 +1,126 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Blocks Produced / s",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(nusantara_blocks_produced_total[1m])",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Transactions Per Slot",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "nusantara_transactions_per_slot",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Slot Time (ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "nusantara_block_time_ms",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Peer Count",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "nusantara_peer_count",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Current Slot",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "nusantara_current_slot",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Root Slot",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 8 },
+      "targets": [
+        {
+          "expr": "nusantara_root_slot",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Skip Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(nusantara_leader_skips_total[5m])",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "Consecutive Skips",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "expr": "nusantara_consecutive_skips",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "title": "RPC Requests / s",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "rate(rpc_requests_total[1m])",
+          "legendFormat": "{{instance}} - {{endpoint}}"
+        }
+      ]
+    },
+    {
+      "title": "VM Executions / s",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "rate(nusantara_wasm_executions_total[1m])",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["nusantara", "blockchain"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Nusantara Blockchain",
+  "uid": "nusantara-main"
+}

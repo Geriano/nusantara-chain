@@ -1,0 +1,167 @@
+use borsh::{BorshDeserialize, BorshSerialize};
+use nusantara_crypto::{Hash, Keypair, PublicKey, Signature, hash as crypto_hash};
+
+use crate::error::CoreError;
+use crate::message::Message;
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Transaction {
+    pub signatures: Vec<Signature>,
+    pub signer_pubkeys: Vec<PublicKey>,
+    pub message: Message,
+}
+
+impl Transaction {
+    pub fn new(message: Message) -> Self {
+        Self {
+            signatures: Vec::new(),
+            signer_pubkeys: Vec::new(),
+            message,
+        }
+    }
+
+    pub fn message_data(&self) -> Vec<u8> {
+        borsh::to_vec(&self.message).expect("message serialization cannot fail")
+    }
+
+    pub fn sign(&mut self, keypairs: &[&Keypair]) {
+        let message_bytes = self.message_data();
+        self.signatures = keypairs
+            .iter()
+            .map(|kp| kp.sign(&message_bytes))
+            .collect();
+        self.signer_pubkeys = keypairs
+            .iter()
+            .map(|kp| kp.public_key().clone())
+            .collect();
+    }
+
+    pub fn verify(&self, pubkeys: &[PublicKey]) -> Result<(), CoreError> {
+        if self.signatures.len() != pubkeys.len() {
+            return Err(CoreError::InvalidTransaction(format!(
+                "signature count {} != pubkey count {}",
+                self.signatures.len(),
+                pubkeys.len()
+            )));
+        }
+
+        let message_bytes = self.message_data();
+        for (i, (sig, pk)) in self.signatures.iter().zip(pubkeys.iter()).enumerate() {
+            sig.verify(pk, &message_bytes).map_err(|_| {
+                CoreError::InvalidTransaction(format!("signature {i} verification failed"))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Verify signatures using the embedded signer public keys.
+    pub fn verify_signatures(&self) -> Result<(), CoreError> {
+        let required = self.message.num_required_signatures as usize;
+        if self.signatures.len() != required {
+            return Err(CoreError::InvalidTransaction(format!(
+                "expected {} signatures, got {}",
+                required,
+                self.signatures.len()
+            )));
+        }
+        if self.signer_pubkeys.len() != self.signatures.len() {
+            return Err(CoreError::InvalidTransaction(format!(
+                "signer_pubkeys count {} != signature count {}",
+                self.signer_pubkeys.len(),
+                self.signatures.len()
+            )));
+        }
+        self.verify(&self.signer_pubkeys)
+    }
+
+    pub fn hash(&self) -> Hash {
+        if self.signatures.is_empty() {
+            crypto_hash(&self.message_data())
+        } else {
+            crypto_hash(self.signatures[0].as_bytes())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instruction::{AccountMeta, CompiledInstruction, Instruction};
+    use nusantara_crypto::hash;
+
+    fn test_message() -> Message {
+        Message {
+            num_required_signatures: 1,
+            num_readonly_signed: 0,
+            num_readonly_unsigned: 1,
+            account_keys: vec![hash(b"payer"), hash(b"program")],
+            recent_blockhash: hash(b"blockhash"),
+            instructions: vec![CompiledInstruction {
+                program_id_index: 1,
+                accounts: vec![0],
+                data: vec![42],
+            }],
+        }
+    }
+
+    #[test]
+    fn new_transaction_has_no_signatures() {
+        let tx = Transaction::new(test_message());
+        assert!(tx.signatures.is_empty());
+        assert!(tx.signer_pubkeys.is_empty());
+    }
+
+    #[test]
+    fn sign_and_verify() {
+        let kp = Keypair::generate();
+        let payer_addr = kp.address();
+        let program = hash(b"program");
+
+        let ix = Instruction {
+            program_id: program,
+            accounts: vec![AccountMeta::new(hash(b"account"), false)],
+            data: vec![1],
+        };
+        let msg = Message::new(&[ix], &payer_addr).unwrap();
+        let mut tx = Transaction::new(msg);
+        tx.sign(&[&kp]);
+
+        assert_eq!(tx.signatures.len(), 1);
+        assert_eq!(tx.signer_pubkeys.len(), 1);
+        tx.verify(&[kp.public_key().clone()]).unwrap();
+        tx.verify_signatures().unwrap();
+    }
+
+    #[test]
+    fn verify_signatures_rejects_invalid() {
+        let kp1 = Keypair::generate();
+        let kp2 = Keypair::generate();
+        let payer_addr = kp1.address();
+        let program = hash(b"program");
+
+        let ix = Instruction {
+            program_id: program,
+            accounts: vec![AccountMeta::new(hash(b"account"), false)],
+            data: vec![1],
+        };
+        let msg = Message::new(&[ix], &payer_addr).unwrap();
+        let mut tx = Transaction::new(msg);
+        tx.sign(&[&kp1]);
+
+        // Tamper: replace the pubkey with wrong one
+        tx.signer_pubkeys = vec![kp2.public_key().clone()];
+        assert!(tx.verify_signatures().is_err());
+    }
+
+    #[test]
+    fn borsh_roundtrip() {
+        let kp = Keypair::generate();
+        let mut tx = Transaction::new(test_message());
+        tx.sign(&[&kp]);
+        let encoded = borsh::to_vec(&tx).unwrap();
+        let decoded: Transaction = borsh::from_slice(&encoded).unwrap();
+        assert_eq!(tx, decoded);
+        // Verify signatures survive roundtrip
+        decoded.verify_signatures().unwrap();
+    }
+}
