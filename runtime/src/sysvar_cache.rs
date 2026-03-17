@@ -2,6 +2,72 @@ use nusantara_core::EpochSchedule;
 use nusantara_rent_program::Rent;
 use nusantara_sysvar_program::{Clock, RecentBlockhashes, SlotHashes, StakeHistory};
 
+/// Builder for [`SysvarCache`] with fluent setters.
+///
+/// All fields default to their `Default` values. Override only what you need.
+///
+/// ```ignore
+/// let cache = SysvarCacheBuilder::new()
+///     .clock(Clock { slot: 100, epoch: 5, ..Clock::default() })
+///     .build();
+/// ```
+#[derive(Default)]
+pub struct SysvarCacheBuilder {
+    clock: Clock,
+    rent: Rent,
+    epoch_schedule: EpochSchedule,
+    slot_hashes: SlotHashes,
+    stake_history: StakeHistory,
+    recent_blockhashes: RecentBlockhashes,
+}
+
+impl SysvarCacheBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    pub fn rent(mut self, rent: Rent) -> Self {
+        self.rent = rent;
+        self
+    }
+
+    pub fn epoch_schedule(mut self, epoch_schedule: EpochSchedule) -> Self {
+        self.epoch_schedule = epoch_schedule;
+        self
+    }
+
+    pub fn slot_hashes(mut self, slot_hashes: SlotHashes) -> Self {
+        self.slot_hashes = slot_hashes;
+        self
+    }
+
+    pub fn stake_history(mut self, stake_history: StakeHistory) -> Self {
+        self.stake_history = stake_history;
+        self
+    }
+
+    pub fn recent_blockhashes(mut self, recent_blockhashes: RecentBlockhashes) -> Self {
+        self.recent_blockhashes = recent_blockhashes;
+        self
+    }
+
+    pub fn build(self) -> SysvarCache {
+        SysvarCache {
+            clock: self.clock,
+            rent: self.rent,
+            epoch_schedule: self.epoch_schedule,
+            slot_hashes: self.slot_hashes,
+            stake_history: self.stake_history,
+            recent_blockhashes: self.recent_blockhashes,
+        }
+    }
+}
+
 pub struct SysvarCache {
     clock: Clock,
     rent: Rent,

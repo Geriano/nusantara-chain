@@ -1,13 +1,16 @@
 use borsh::BorshDeserialize;
-use nusantara_vote_program::{
-    Lockout, MAX_LOCKOUT_HISTORY, Vote, VoteAuthorize, VoteInit, VoteInstruction, VoteState,
-};
+use nusantara_vote_program::VoteInstruction;
 
+use crate::cost_schedule::VOTE_BASE_COST;
 use crate::error::RuntimeError;
 use crate::sysvar_cache::SysvarCache;
 use crate::transaction_context::TransactionContext;
 
-const VOTE_BASE_COST: u64 = 2100;
+mod authorize;
+mod commission;
+mod initialize;
+mod vote_action;
+mod withdraw;
 
 pub fn process_vote(
     accounts: &[u8],
@@ -22,18 +25,18 @@ pub fn process_vote(
 
     match instruction {
         VoteInstruction::InitializeAccount(init) => {
-            process_initialize(accounts, init, ctx, sysvars)
+            initialize::process_initialize(accounts, init, ctx, sysvars)
         }
-        VoteInstruction::Vote(vote) => process_vote_action(accounts, vote, ctx, sysvars),
+        VoteInstruction::Vote(vote) => vote_action::process_vote_action(accounts, vote, ctx, sysvars),
         VoteInstruction::Authorize(new_auth, auth_type) => {
-            process_authorize(accounts, new_auth, auth_type, ctx)
+            authorize::process_authorize(accounts, new_auth, auth_type, ctx)
         }
-        VoteInstruction::Withdraw(lamports) => process_withdraw(accounts, lamports, ctx),
+        VoteInstruction::Withdraw(lamports) => withdraw::process_withdraw(accounts, lamports, ctx),
         VoteInstruction::UpdateCommission(commission) => {
-            process_update_commission(accounts, commission, ctx)
+            commission::process_update_commission(accounts, commission, ctx)
         }
         VoteInstruction::SwitchVote(vote, _proof_hash) => {
-            process_vote_action(accounts, vote, ctx, sysvars)
+            vote_action::process_vote_action(accounts, vote, ctx, sysvars)
         }
         VoteInstruction::UpdateValidatorIdentity => Err(RuntimeError::ProgramError {
             program: "vote".to_string(),
@@ -42,322 +45,19 @@ pub fn process_vote(
     }
 }
 
-fn process_initialize(
-    accounts: &[u8],
-    init: VoteInit,
-    ctx: &mut TransactionContext,
-    sysvars: &SysvarCache,
-) -> Result<(), RuntimeError> {
-    if accounts.is_empty() {
-        return Err(RuntimeError::InvalidInstructionData(
-            "InitializeAccount requires 1 account".to_string(),
-        ));
-    }
-    let vote_idx = accounts[0] as usize;
-
-    // Check if already initialized
-    {
-        let acc = ctx.get_account(vote_idx)?;
-        if !acc.account.data.is_empty()
-            && let Ok(state) = VoteState::try_from_slice(&acc.account.data)
-            && (!state.votes.is_empty() || state.authorized_voter != nusantara_crypto::Hash::zero())
-        {
-            return Err(RuntimeError::InvalidAccountData(
-                "vote account already initialized".to_string(),
-            ));
-        }
-    }
-
-    // Check rent exemption
-    let state = VoteState::new(&init);
-    let state_data =
-        borsh::to_vec(&state).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-    {
-        let acc = ctx.get_account(vote_idx)?;
-        let min = sysvars.rent().minimum_balance(state_data.len());
-        if acc.account.lamports < min {
-            return Err(RuntimeError::RentNotMet {
-                needed: min,
-                available: acc.account.lamports,
-            });
-        }
-    }
-
-    let acc = ctx.get_account_mut(vote_idx)?;
-    acc.account.data = state_data;
-    Ok(())
-}
-
-fn process_vote_action(
-    accounts: &[u8],
-    vote: Vote,
-    ctx: &mut TransactionContext,
-    sysvars: &SysvarCache,
-) -> Result<(), RuntimeError> {
-    if accounts.len() < 2 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Vote requires 2 accounts".to_string(),
-        ));
-    }
-    let vote_idx = accounts[0] as usize;
-    let voter_idx = accounts[1] as usize;
-
-    // Verify voter is signer
-    let voter_address = {
-        let voter = ctx.get_account(voter_idx)?;
-        if !voter.is_signer {
-            return Err(RuntimeError::AccountNotSigner(voter_idx));
-        }
-        *voter.address
-    };
-
-    // Load state
-    let mut state = {
-        let acc = ctx.get_account(vote_idx)?;
-        VoteState::try_from_slice(&acc.account.data)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?
-    };
-
-    // Verify authorization
-    if state.authorized_voter != voter_address {
-        return Err(RuntimeError::ProgramError {
-            program: "vote".to_string(),
-            message: "not authorized voter".to_string(),
-        });
-    }
-
-    // Process each vote slot
-    for &slot in &vote.slots {
-        // Add new lockout
-        let lockout = Lockout {
-            slot,
-            confirmation_count: 1,
-        };
-        state.votes.push(lockout);
-
-        // Increment confirmation counts for existing votes
-        // that are not locked out at this slot
-        let len = state.votes.len();
-        if len > 1 {
-            for i in (0..len - 1).rev() {
-                state.votes[i].confirmation_count += 1;
-            }
-        }
-
-        // Pop votes that have reached max lockout
-        while state.votes.len() > MAX_LOCKOUT_HISTORY as usize {
-            let oldest = state.votes.remove(0);
-            state.root_slot = Some(oldest.slot);
-        }
-    }
-
-    // Update epoch credits
-    let current_epoch = sysvars.clock().epoch;
-    if let Some(last) = state.epoch_credits.last_mut() {
-        if last.0 == current_epoch {
-            last.1 += vote.slots.len() as u64;
-        } else {
-            let prev_credits = last.1;
-            state.epoch_credits.push((
-                current_epoch,
-                prev_credits + vote.slots.len() as u64,
-                prev_credits,
-            ));
-        }
-    } else {
-        state
-            .epoch_credits
-            .push((current_epoch, vote.slots.len() as u64, 0));
-    }
-
-    // Update timestamp
-    if let Some(ts) = vote.timestamp {
-        state.last_timestamp = nusantara_vote_program::BlockTimestamp {
-            slot: *vote.slots.last().unwrap_or(&0),
-            timestamp: ts,
-        };
-    }
-
-    let state_data =
-        borsh::to_vec(&state).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-    let acc = ctx.get_account_mut(vote_idx)?;
-    acc.account.data = state_data;
-    Ok(())
-}
-
-fn process_authorize(
-    accounts: &[u8],
-    new_auth: nusantara_crypto::Hash,
-    auth_type: VoteAuthorize,
-    ctx: &mut TransactionContext,
-) -> Result<(), RuntimeError> {
-    if accounts.len() < 2 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Authorize requires 2 accounts".to_string(),
-        ));
-    }
-    let vote_idx = accounts[0] as usize;
-    let auth_idx = accounts[1] as usize;
-
-    let auth_address = {
-        let auth = ctx.get_account(auth_idx)?;
-        if !auth.is_signer {
-            return Err(RuntimeError::AccountNotSigner(auth_idx));
-        }
-        *auth.address
-    };
-
-    let mut state = {
-        let acc = ctx.get_account(vote_idx)?;
-        VoteState::try_from_slice(&acc.account.data)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?
-    };
-
-    match auth_type {
-        VoteAuthorize::Voter => {
-            if state.authorized_voter != auth_address {
-                return Err(RuntimeError::ProgramError {
-                    program: "vote".to_string(),
-                    message: "not authorized voter".to_string(),
-                });
-            }
-            state.authorized_voter = new_auth;
-        }
-        VoteAuthorize::Withdrawer => {
-            if state.authorized_withdrawer != auth_address {
-                return Err(RuntimeError::ProgramError {
-                    program: "vote".to_string(),
-                    message: "not authorized withdrawer".to_string(),
-                });
-            }
-            state.authorized_withdrawer = new_auth;
-        }
-    }
-
-    let state_data =
-        borsh::to_vec(&state).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-    let acc = ctx.get_account_mut(vote_idx)?;
-    acc.account.data = state_data;
-    Ok(())
-}
-
-fn process_withdraw(
-    accounts: &[u8],
-    lamports: u64,
-    ctx: &mut TransactionContext,
-) -> Result<(), RuntimeError> {
-    if accounts.len() < 3 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Withdraw requires 3 accounts".to_string(),
-        ));
-    }
-    let vote_idx = accounts[0] as usize;
-    let to_idx = accounts[1] as usize;
-    let withdrawer_idx = accounts[2] as usize;
-
-    let withdrawer_address = {
-        let withdrawer = ctx.get_account(withdrawer_idx)?;
-        if !withdrawer.is_signer {
-            return Err(RuntimeError::AccountNotSigner(withdrawer_idx));
-        }
-        *withdrawer.address
-    };
-
-    let state = {
-        let acc = ctx.get_account(vote_idx)?;
-        VoteState::try_from_slice(&acc.account.data)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?
-    };
-
-    if state.authorized_withdrawer != withdrawer_address {
-        return Err(RuntimeError::ProgramError {
-            program: "vote".to_string(),
-            message: "not authorized withdrawer".to_string(),
-        });
-    }
-
-    {
-        let acc = ctx.get_account(vote_idx)?;
-        if acc.account.lamports < lamports {
-            return Err(RuntimeError::InsufficientFunds {
-                needed: lamports,
-                available: acc.account.lamports,
-            });
-        }
-    }
-
-    {
-        let acc = ctx.get_account_mut(vote_idx)?;
-        acc.account.lamports -= lamports;
-    }
-
-    {
-        let acc = ctx.get_account_mut(to_idx)?;
-        acc.account.lamports = acc
-            .account
-            .lamports
-            .checked_add(lamports)
-            .ok_or(RuntimeError::LamportsOverflow)?;
-    }
-
-    Ok(())
-}
-
-fn process_update_commission(
-    accounts: &[u8],
-    commission: u8,
-    ctx: &mut TransactionContext,
-) -> Result<(), RuntimeError> {
-    if accounts.is_empty() {
-        return Err(RuntimeError::InvalidInstructionData(
-            "UpdateCommission requires 1 account".to_string(),
-        ));
-    }
-    let vote_idx = accounts[0] as usize;
-
-    let mut state = {
-        let acc = ctx.get_account(vote_idx)?;
-        VoteState::try_from_slice(&acc.account.data)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?
-    };
-
-    state.commission = commission;
-
-    let state_data =
-        borsh::to_vec(&state).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-    let acc = ctx.get_account_mut(vote_idx)?;
-    acc.account.data = state_data;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use nusantara_core::instruction::AccountMeta;
     use nusantara_core::program::VOTE_PROGRAM_ID;
-    use nusantara_core::{Account, EpochSchedule, Instruction, Message};
+    use nusantara_core::{Account, Instruction, Message};
     use nusantara_crypto::hash;
-    use nusantara_rent_program::Rent;
-    use nusantara_sysvar_program::{Clock, RecentBlockhashes, SlotHashes, StakeHistory};
+    use nusantara_vote_program::{Vote, VoteAuthorize, VoteInit, VoteState};
+
+    use crate::test_utils::test_sysvars_with_clock;
 
     fn test_sysvars() -> SysvarCache {
-        SysvarCache::new(
-            Clock {
-                slot: 100,
-                epoch: 5,
-                unix_timestamp: 1_000_000,
-                ..Clock::default()
-            },
-            Rent::default(),
-            EpochSchedule::default(),
-            SlotHashes::default(),
-            StakeHistory::default(),
-            RecentBlockhashes::default(),
-        )
+        test_sysvars_with_clock(100, 5, 1_000_000)
     }
 
     fn setup_vote_init() -> (TransactionContext, Vec<u8>, Vec<u8>, SysvarCache) {

@@ -239,24 +239,8 @@ mod tests {
     use nusantara_crypto::{Keypair, hash};
     use nusantara_rent_program::Rent;
     use nusantara_sysvar_program::{Clock, RecentBlockhashes, SlotHashes, StakeHistory};
-    use tempfile::tempdir;
 
-    fn test_sysvars() -> SysvarCache {
-        SysvarCache::new(
-            Clock::default(),
-            Rent::default(),
-            EpochSchedule::default(),
-            SlotHashes::default(),
-            StakeHistory::default(),
-            RecentBlockhashes::default(),
-        )
-    }
-
-    fn test_storage() -> (Storage, tempfile::TempDir) {
-        let dir = tempdir().unwrap();
-        let storage = Storage::open(dir.path()).unwrap();
-        (storage, dir)
-    }
+    use crate::test_utils::{test_storage, test_sysvars};
 
     fn create_signed_transfer_tx(kp: &Keypair, to: Hash, amount: u64) -> Transaction {
         let from = kp.address();

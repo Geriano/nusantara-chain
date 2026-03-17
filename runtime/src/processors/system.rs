@@ -1,14 +1,13 @@
 use borsh::BorshDeserialize;
 use nusantara_system_program::SystemInstruction;
 
+use super::helpers::{require_accounts, require_signer};
+use crate::cost_schedule::{
+    SYSTEM_ALLOCATE_COST, SYSTEM_ASSIGN_COST, SYSTEM_CREATE_ACCOUNT_COST, SYSTEM_TRANSFER_COST,
+};
 use crate::error::RuntimeError;
 use crate::sysvar_cache::SysvarCache;
 use crate::transaction_context::TransactionContext;
-
-const CREATE_ACCOUNT_COST: u64 = 1500;
-const TRANSFER_COST: u64 = 450;
-const ASSIGN_COST: u64 = 450;
-const ALLOCATE_COST: u64 = 450;
 
 pub fn process_system(
     accounts: &[u8],
@@ -25,19 +24,19 @@ pub fn process_system(
             space,
             owner,
         } => {
-            ctx.consume_compute(CREATE_ACCOUNT_COST)?;
+            ctx.consume_compute(SYSTEM_CREATE_ACCOUNT_COST)?;
             process_create_account(accounts, lamports, space, owner, ctx, sysvars)
         }
         SystemInstruction::Transfer { lamports } => {
-            ctx.consume_compute(TRANSFER_COST)?;
+            ctx.consume_compute(SYSTEM_TRANSFER_COST)?;
             process_transfer(accounts, lamports, ctx)
         }
         SystemInstruction::Assign { owner } => {
-            ctx.consume_compute(ASSIGN_COST)?;
+            ctx.consume_compute(SYSTEM_ASSIGN_COST)?;
             process_assign(accounts, owner, ctx)
         }
         SystemInstruction::Allocate { space } => {
-            ctx.consume_compute(ALLOCATE_COST)?;
+            ctx.consume_compute(SYSTEM_ALLOCATE_COST)?;
             process_allocate(accounts, space, ctx)
         }
         SystemInstruction::AdvanceNonceAccount
@@ -59,33 +58,21 @@ fn process_create_account(
     ctx: &mut TransactionContext,
     sysvars: &SysvarCache,
 ) -> Result<(), RuntimeError> {
-    if accounts.len() < 2 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "CreateAccount requires 2 accounts".to_string(),
-        ));
-    }
+    require_accounts(accounts, 2, "CreateAccount")?;
     let funder_idx = accounts[0] as usize;
     let new_idx = accounts[1] as usize;
 
-    // Verify new account is signer
+    // Verify new account is signer and empty
+    require_signer(ctx, new_idx)?;
     {
         let new_acc = ctx.get_account(new_idx)?;
-        if !new_acc.is_signer {
-            return Err(RuntimeError::AccountNotSigner(new_idx));
-        }
-        // Verify new account is empty
         if !new_acc.account.is_empty() {
             return Err(RuntimeError::AccountAlreadyExists);
         }
     }
 
     // Verify funder is signer
-    {
-        let funder = ctx.get_account(funder_idx)?;
-        if !funder.is_signer {
-            return Err(RuntimeError::AccountNotSigner(funder_idx));
-        }
-    }
+    require_signer(ctx, funder_idx)?;
 
     // Check rent exemption
     let min_balance = sysvars.rent().minimum_balance(space as usize);
@@ -124,21 +111,11 @@ fn process_transfer(
     lamports: u64,
     ctx: &mut TransactionContext,
 ) -> Result<(), RuntimeError> {
-    if accounts.len() < 2 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Transfer requires 2 accounts".to_string(),
-        ));
-    }
+    require_accounts(accounts, 2, "Transfer")?;
     let from_idx = accounts[0] as usize;
     let to_idx = accounts[1] as usize;
 
-    // Verify signer
-    {
-        let from = ctx.get_account(from_idx)?;
-        if !from.is_signer {
-            return Err(RuntimeError::AccountNotSigner(from_idx));
-        }
-    }
+    require_signer(ctx, from_idx)?;
 
     // Debit
     {
@@ -170,19 +147,10 @@ fn process_assign(
     owner: nusantara_crypto::Hash,
     ctx: &mut TransactionContext,
 ) -> Result<(), RuntimeError> {
-    if accounts.is_empty() {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Assign requires 1 account".to_string(),
-        ));
-    }
+    require_accounts(accounts, 1, "Assign")?;
     let account_idx = accounts[0] as usize;
 
-    {
-        let acc = ctx.get_account(account_idx)?;
-        if !acc.is_signer {
-            return Err(RuntimeError::AccountNotSigner(account_idx));
-        }
-    }
+    require_signer(ctx, account_idx)?;
 
     let acc = ctx.get_account_mut(account_idx)?;
     acc.account.owner = owner;
@@ -194,18 +162,12 @@ fn process_allocate(
     space: u64,
     ctx: &mut TransactionContext,
 ) -> Result<(), RuntimeError> {
-    if accounts.is_empty() {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Allocate requires 1 account".to_string(),
-        ));
-    }
+    require_accounts(accounts, 1, "Allocate")?;
     let account_idx = accounts[0] as usize;
 
+    require_signer(ctx, account_idx)?;
     {
         let acc = ctx.get_account(account_idx)?;
-        if !acc.is_signer {
-            return Err(RuntimeError::AccountNotSigner(account_idx));
-        }
         if !acc.account.data.is_empty() {
             return Err(RuntimeError::InvalidAccountData(
                 "account already has data".to_string(),
@@ -223,21 +185,11 @@ mod tests {
     use super::*;
     use nusantara_core::instruction::{AccountMeta, Instruction};
     use nusantara_core::program::SYSTEM_PROGRAM_ID;
-    use nusantara_core::{Account, EpochSchedule, Message};
+    use nusantara_core::{Account, Message};
     use nusantara_crypto::hash;
     use nusantara_rent_program::Rent;
-    use nusantara_sysvar_program::{Clock, RecentBlockhashes, SlotHashes, StakeHistory};
 
-    fn test_sysvars() -> SysvarCache {
-        SysvarCache::new(
-            Clock::default(),
-            Rent::default(),
-            EpochSchedule::default(),
-            SlotHashes::default(),
-            StakeHistory::default(),
-            RecentBlockhashes::default(),
-        )
-    }
+    use crate::test_utils::test_sysvars;
 
     fn setup_transfer(
         from_balance: u64,

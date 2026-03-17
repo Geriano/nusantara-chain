@@ -22,11 +22,8 @@
 //! lock-free from the caller's perspective. The `ProgramCache` uses a
 //! `parking_lot::Mutex` with very short critical sections (no `.await`).
 
-use std::collections::HashMap;
-
-use nusantara_core::{Account, FeeCalculator, Transaction};
-use nusantara_crypto::{Hash, Hasher};
-use nusantara_storage::{Storage, TransactionStatus, TransactionStatusMeta};
+use nusantara_core::{FeeCalculator, Transaction};
+use nusantara_storage::Storage;
 use nusantara_vm::ProgramCache;
 use rayon::prelude::*;
 use tracing::instrument;
@@ -34,6 +31,7 @@ use tracing::instrument;
 use crate::batch_executor::SlotExecutionResult;
 use crate::error::RuntimeError;
 use crate::scheduler::TransactionScheduler;
+use crate::slot_commit::SlotCommitter;
 use crate::sysvar_cache::SysvarCache;
 use crate::transaction_executor::{TransactionResult, execute_transaction};
 
@@ -67,14 +65,7 @@ pub fn execute_slot_parallel(
     fee_calculator: &FeeCalculator,
     program_cache: &ProgramCache,
 ) -> Result<SlotExecutionResult, RuntimeError> {
-    let mut transactions_executed = 0u64;
-    let mut transactions_succeeded = 0u64;
-    let mut transactions_failed = 0u64;
-    let mut total_fees = 0u64;
-    let mut total_compute_consumed = 0u64;
-    let mut delta_hasher = Hasher::default();
-    // Collect all account deltas; later writes for the same address override earlier ones.
-    let mut merged_deltas: HashMap<Hash, Account> = HashMap::new();
+    let mut committer = SlotCommitter::new();
 
     // Step 1: Schedule transactions into parallel batches
     let batches = TransactionScheduler::schedule(transactions);
@@ -102,118 +93,30 @@ pub fn execute_slot_parallel(
 
         // Commit results in original order (deterministic delta hash)
         for (tx_idx, result) in sorted_results {
-            transactions_executed += 1;
-            total_fees += result.fee;
-            total_compute_consumed += result.compute_units_consumed;
-
-            let status = match &result.status {
-                Ok(()) => {
-                    transactions_succeeded += 1;
-                    TransactionStatus::Success
-                }
-                Err(e) => {
-                    transactions_failed += 1;
-                    tracing::warn!(
-                        slot,
-                        tx_idx,
-                        error = %e,
-                        fee = result.fee,
-                        "transaction failed"
-                    );
-                    TransactionStatus::Failed(e.to_string())
-                }
-            };
-
-            // Commit account deltas to storage
-            for (address, account) in &result.account_deltas {
-                storage.put_account(address, slot, account)?;
-
-                // Feed into delta hash (identical to sequential path)
-                let account_bytes = borsh::to_vec(account)
-                    .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-                delta_hasher.update(address.as_bytes());
-                delta_hasher.update(&account_bytes);
-
-                // Track final state for each address (last write wins)
-                merged_deltas.insert(*address, account.clone());
-            }
-
-            // Record transaction status
-            let meta = TransactionStatusMeta {
-                slot,
-                status,
-                fee: result.fee,
-                pre_balances: result.pre_balances,
-                post_balances: result.post_balances,
-                compute_units_consumed: result.compute_units_consumed,
-            };
-            storage.put_transaction_status(&result.tx_hash, &meta)?;
-
-            // Record address signatures
-            for (address, _) in &result.account_deltas {
-                storage.put_address_signature(address, slot, tx_idx as u32, &result.tx_hash)?;
-            }
+            committer.commit_result(tx_idx, result, slot, storage)?;
         }
     }
 
-    let account_delta_hash = delta_hasher.finalize();
+    let result = committer.finalize(slot);
 
-    // Sort deltas by address for deterministic state tree updates
-    let mut account_deltas: Vec<(Hash, Account)> = merged_deltas.into_iter().collect();
-    account_deltas.sort_by_key(|(addr, _)| *addr);
-
-    metrics::counter!("runtime_parallel_slot_transactions_total").increment(transactions_executed);
-    metrics::counter!("runtime_parallel_slot_fees_collected_total").increment(total_fees);
-    metrics::counter!("runtime_parallel_slot_compute_consumed").increment(total_compute_consumed);
+    metrics::counter!("runtime_parallel_slot_transactions_total")
+        .increment(result.transactions_executed);
+    metrics::counter!("runtime_parallel_slot_fees_collected_total").increment(result.total_fees);
+    metrics::counter!("runtime_parallel_slot_compute_consumed")
+        .increment(result.total_compute_consumed);
     metrics::counter!("runtime_parallel_batches_total").increment(batches.len() as u64);
 
-    Ok(SlotExecutionResult {
-        slot,
-        transactions_executed,
-        transactions_succeeded,
-        transactions_failed,
-        total_fees,
-        total_compute_consumed,
-        account_delta_hash,
-        account_deltas,
-    })
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use nusantara_core::program::SYSTEM_PROGRAM_ID;
-    use nusantara_core::{Account, EpochSchedule, Message};
+    use nusantara_core::Account;
     use nusantara_crypto::{Hash, Keypair, hash};
-    use nusantara_rent_program::Rent;
-    use nusantara_sysvar_program::{Clock, RecentBlockhashes, SlotHashes, StakeHistory};
-    use tempfile::tempdir;
 
-    fn test_sysvars() -> SysvarCache {
-        SysvarCache::new(
-            Clock::default(),
-            Rent::default(),
-            EpochSchedule::default(),
-            SlotHashes::default(),
-            StakeHistory::default(),
-            RecentBlockhashes::default(),
-        )
-    }
-
-    fn test_storage() -> (Storage, tempfile::TempDir) {
-        let dir = tempdir().unwrap();
-        let storage = Storage::open(dir.path()).unwrap();
-        (storage, dir)
-    }
-
-    fn transfer_tx(from_kp: &Keypair, to: Hash, amount: u64) -> Transaction {
-        let from = from_kp.address();
-        let ix = nusantara_system_program::transfer(&from, &to, amount);
-        let msg = Message::new(&[ix], &from).unwrap();
-        let mut tx = Transaction::new(msg);
-        tx.sign(&[from_kp]);
-        tx
-    }
+    use crate::test_utils::{test_storage, test_sysvars, transfer_tx};
 
     // ---------------------------------------------------------------
     // Determinism: parallel must produce identical delta hash as sequential

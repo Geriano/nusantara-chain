@@ -4,6 +4,9 @@ description = "Transaction execution engine for the Nusantara blockchain"
 version.workspace = true
 edition.workspace = true
 
+[features]
+test-utils = ["dep:tempfile"]
+
 [dependencies]
 nusantara-crypto.workspace = true
 nusantara-core.workspace = true
@@ -22,6 +25,7 @@ thiserror.workspace = true
 tracing.workspace = true
 metrics.workspace = true
 rayon.workspace = true
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

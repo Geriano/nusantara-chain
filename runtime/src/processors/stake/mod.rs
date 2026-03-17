@@ -1,14 +1,16 @@
-use borsh::BorshDeserialize;
-use nusantara_stake_program::{
-    Authorized, DEFAULT_MIN_DELEGATION, DEFAULT_WARMUP_COOLDOWN_RATE_BPS, Delegation, Lockup, Meta,
-    Stake, StakeInstruction, StakeStateV2,
-};
+mod deactivate;
+mod delegate;
+mod initialize;
+mod split;
+mod withdraw;
 
+use borsh::BorshDeserialize;
+use nusantara_stake_program::StakeInstruction;
+
+use crate::cost_schedule::STAKE_BASE_COST;
 use crate::error::RuntimeError;
 use crate::sysvar_cache::SysvarCache;
 use crate::transaction_context::TransactionContext;
-
-const STAKE_BASE_COST: u64 = 750;
 
 pub fn process_stake(
     accounts: &[u8],
@@ -23,12 +25,16 @@ pub fn process_stake(
 
     match instruction {
         StakeInstruction::Initialize(authorized, lockup) => {
-            process_initialize(accounts, authorized, lockup, ctx, sysvars)
+            initialize::process_initialize(accounts, authorized, lockup, ctx, sysvars)
         }
-        StakeInstruction::DelegateStake => process_delegate(accounts, ctx, sysvars),
-        StakeInstruction::Deactivate => process_deactivate(accounts, ctx, sysvars),
-        StakeInstruction::Withdraw(lamports) => process_withdraw(accounts, lamports, ctx, sysvars),
-        StakeInstruction::Split(lamports) => process_split(accounts, lamports, ctx, sysvars),
+        StakeInstruction::DelegateStake => delegate::process_delegate(accounts, ctx, sysvars),
+        StakeInstruction::Deactivate => deactivate::process_deactivate(accounts, ctx, sysvars),
+        StakeInstruction::Withdraw(lamports) => {
+            withdraw::process_withdraw(accounts, lamports, ctx, sysvars)
+        }
+        StakeInstruction::Split(lamports) => {
+            split::process_split(accounts, lamports, ctx, sysvars)
+        }
         StakeInstruction::Merge
         | StakeInstruction::Authorize(_, _)
         | StakeInstruction::SetLockup(_) => Err(RuntimeError::ProgramError {
@@ -38,464 +44,21 @@ pub fn process_stake(
     }
 }
 
-fn process_initialize(
-    accounts: &[u8],
-    authorized: Authorized,
-    lockup: Lockup,
-    ctx: &mut TransactionContext,
-    sysvars: &SysvarCache,
-) -> Result<(), RuntimeError> {
-    if accounts.is_empty() {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Initialize requires 1 account".to_string(),
-        ));
-    }
-    let stake_idx = accounts[0] as usize;
-
-    // Check current state
-    let current_state = {
-        let acc = ctx.get_account(stake_idx)?;
-        if acc.account.data.is_empty() {
-            StakeStateV2::Uninitialized
-        } else {
-            BorshDeserialize::deserialize(&mut acc.account.data.as_slice())
-                .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?
-        }
-    };
-
-    if current_state != StakeStateV2::Uninitialized {
-        return Err(RuntimeError::InvalidAccountData(
-            "stake account already initialized".to_string(),
-        ));
-    }
-
-    // Check rent exemption
-    let rent_exempt_reserve = {
-        let acc = ctx.get_account(stake_idx)?;
-        let reserve = sysvars.rent().minimum_balance(acc.account.data.len());
-        if acc.account.lamports < reserve {
-            return Err(RuntimeError::RentNotMet {
-                needed: reserve,
-                available: acc.account.lamports,
-            });
-        }
-        reserve
-    };
-
-    let meta = Meta {
-        rent_exempt_reserve,
-        authorized,
-        lockup,
-    };
-    let state = StakeStateV2::Initialized(meta);
-    let state_data =
-        borsh::to_vec(&state).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-    let acc = ctx.get_account_mut(stake_idx)?;
-    acc.account.data = state_data;
-    Ok(())
-}
-
-fn process_delegate(
-    accounts: &[u8],
-    ctx: &mut TransactionContext,
-    sysvars: &SysvarCache,
-) -> Result<(), RuntimeError> {
-    if accounts.len() < 3 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "DelegateStake requires 3 accounts".to_string(),
-        ));
-    }
-    let stake_idx = accounts[0] as usize;
-    let vote_idx = accounts[1] as usize;
-    let staker_idx = accounts[2] as usize;
-
-    // Verify staker is signer
-    {
-        let staker = ctx.get_account(staker_idx)?;
-        if !staker.is_signer {
-            return Err(RuntimeError::AccountNotSigner(staker_idx));
-        }
-    }
-
-    let staker_address = {
-        let staker = ctx.get_account(staker_idx)?;
-        *staker.address
-    };
-
-    let vote_address = {
-        let vote = ctx.get_account(vote_idx)?;
-        *vote.address
-    };
-
-    // Load current stake state
-    let (meta, _current_state) = {
-        let acc = ctx.get_account(stake_idx)?;
-        let state = StakeStateV2::try_from_slice(&acc.account.data)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-        match state {
-            StakeStateV2::Initialized(m) => (m, "initialized"),
-            _ => {
-                return Err(RuntimeError::InvalidAccountData(
-                    "stake account must be initialized to delegate".to_string(),
-                ));
-            }
-        }
-    };
-
-    // Verify staker authorization
-    if meta.authorized.staker != staker_address {
-        return Err(RuntimeError::AccountNotSigner(staker_idx));
-    }
-
-    let stake_lamports = {
-        let acc = ctx.get_account(stake_idx)?;
-        acc.account
-            .lamports
-            .saturating_sub(meta.rent_exempt_reserve)
-    };
-
-    if stake_lamports < DEFAULT_MIN_DELEGATION {
-        return Err(RuntimeError::InsufficientFunds {
-            needed: DEFAULT_MIN_DELEGATION,
-            available: stake_lamports,
-        });
-    }
-
-    let delegation = Delegation {
-        voter_pubkey: vote_address,
-        stake: stake_lamports,
-        activation_epoch: sysvars.clock().epoch,
-        deactivation_epoch: u64::MAX,
-        warmup_cooldown_rate_bps: DEFAULT_WARMUP_COOLDOWN_RATE_BPS,
-    };
-
-    let stake = Stake {
-        delegation,
-        credits_observed: 0,
-    };
-
-    let new_state = StakeStateV2::Stake(meta, stake);
-    let state_data =
-        borsh::to_vec(&new_state).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-    let acc = ctx.get_account_mut(stake_idx)?;
-    acc.account.data = state_data;
-    Ok(())
-}
-
-fn process_deactivate(
-    accounts: &[u8],
-    ctx: &mut TransactionContext,
-    sysvars: &SysvarCache,
-) -> Result<(), RuntimeError> {
-    if accounts.len() < 2 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Deactivate requires 2 accounts".to_string(),
-        ));
-    }
-    let stake_idx = accounts[0] as usize;
-    let staker_idx = accounts[1] as usize;
-
-    // Verify staker is signer
-    let staker_address = {
-        let staker = ctx.get_account(staker_idx)?;
-        if !staker.is_signer {
-            return Err(RuntimeError::AccountNotSigner(staker_idx));
-        }
-        *staker.address
-    };
-
-    let (meta, mut stake) = {
-        let acc = ctx.get_account(stake_idx)?;
-        let state = StakeStateV2::try_from_slice(&acc.account.data)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-        match state {
-            StakeStateV2::Stake(m, s) => (m, s),
-            _ => {
-                return Err(RuntimeError::InvalidAccountData(
-                    "stake account must be delegated to deactivate".to_string(),
-                ));
-            }
-        }
-    };
-
-    if meta.authorized.staker != staker_address {
-        return Err(RuntimeError::AccountNotSigner(staker_idx));
-    }
-
-    stake.delegation.deactivation_epoch = sysvars.clock().epoch;
-
-    let new_state = StakeStateV2::Stake(meta, stake);
-    let state_data =
-        borsh::to_vec(&new_state).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-    let acc = ctx.get_account_mut(stake_idx)?;
-    acc.account.data = state_data;
-    Ok(())
-}
-
-fn process_withdraw(
-    accounts: &[u8],
-    lamports: u64,
-    ctx: &mut TransactionContext,
-    sysvars: &SysvarCache,
-) -> Result<(), RuntimeError> {
-    if accounts.len() < 3 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Withdraw requires 3 accounts".to_string(),
-        ));
-    }
-    let stake_idx = accounts[0] as usize;
-    let to_idx = accounts[1] as usize;
-    let withdrawer_idx = accounts[2] as usize;
-
-    // Verify withdrawer is signer
-    let withdrawer_address = {
-        let withdrawer = ctx.get_account(withdrawer_idx)?;
-        if !withdrawer.is_signer {
-            return Err(RuntimeError::AccountNotSigner(withdrawer_idx));
-        }
-        *withdrawer.address
-    };
-
-    let state = {
-        let acc = ctx.get_account(stake_idx)?;
-        StakeStateV2::try_from_slice(&acc.account.data)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?
-    };
-
-    let meta = match &state {
-        StakeStateV2::Initialized(m) | StakeStateV2::Stake(m, _) => m,
-        _ => {
-            return Err(RuntimeError::InvalidAccountData(
-                "stake account not initialized".to_string(),
-            ));
-        }
-    };
-
-    if meta.authorized.withdrawer != withdrawer_address {
-        return Err(RuntimeError::AccountNotSigner(withdrawer_idx));
-    }
-
-    // Check lockup
-    if meta.lockup.unix_timestamp > sysvars.clock().unix_timestamp
-        || meta.lockup.epoch > sysvars.clock().epoch
-    {
-        return Err(RuntimeError::ProgramError {
-            program: "stake".to_string(),
-            message: "stake account is locked".to_string(),
-        });
-    }
-
-    // Check available balance
-    let available = {
-        let acc = ctx.get_account(stake_idx)?;
-        match &state {
-            StakeStateV2::Initialized(_) => acc
-                .account
-                .lamports
-                .saturating_sub(meta.rent_exempt_reserve),
-            StakeStateV2::Stake(_, s) => {
-                if s.delegation.deactivation_epoch < sysvars.clock().epoch {
-                    acc.account
-                        .lamports
-                        .saturating_sub(meta.rent_exempt_reserve)
-                } else {
-                    0 // cannot withdraw while active
-                }
-            }
-            _ => 0,
-        }
-    };
-
-    if lamports > available {
-        return Err(RuntimeError::InsufficientFunds {
-            needed: lamports,
-            available,
-        });
-    }
-
-    // Debit stake account
-    {
-        let acc = ctx.get_account_mut(stake_idx)?;
-        acc.account.lamports -= lamports;
-    }
-
-    // Credit destination
-    {
-        let acc = ctx.get_account_mut(to_idx)?;
-        acc.account.lamports = acc
-            .account
-            .lamports
-            .checked_add(lamports)
-            .ok_or(RuntimeError::LamportsOverflow)?;
-    }
-
-    Ok(())
-}
-
-fn process_split(
-    accounts: &[u8],
-    lamports: u64,
-    ctx: &mut TransactionContext,
-    sysvars: &SysvarCache,
-) -> Result<(), RuntimeError> {
-    if accounts.len() < 3 {
-        return Err(RuntimeError::InvalidInstructionData(
-            "Split requires 3 accounts".to_string(),
-        ));
-    }
-    let stake_idx = accounts[0] as usize;
-    let split_idx = accounts[1] as usize;
-    let staker_idx = accounts[2] as usize;
-
-    // Verify staker is signer
-    let staker_address = {
-        let staker = ctx.get_account(staker_idx)?;
-        if !staker.is_signer {
-            return Err(RuntimeError::AccountNotSigner(staker_idx));
-        }
-        *staker.address
-    };
-
-    let (meta, stake_opt) = {
-        let acc = ctx.get_account(stake_idx)?;
-        let state = StakeStateV2::try_from_slice(&acc.account.data)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-        match state {
-            StakeStateV2::Initialized(m) => (m, None),
-            StakeStateV2::Stake(m, s) => (m, Some(s)),
-            _ => {
-                return Err(RuntimeError::InvalidAccountData(
-                    "stake account not initialized".to_string(),
-                ));
-            }
-        }
-    };
-
-    if meta.authorized.staker != staker_address {
-        return Err(RuntimeError::AccountNotSigner(staker_idx));
-    }
-
-    let source_lamports = {
-        let acc = ctx.get_account(stake_idx)?;
-        acc.account.lamports
-    };
-
-    if lamports > source_lamports.saturating_sub(meta.rent_exempt_reserve) {
-        return Err(RuntimeError::InsufficientFunds {
-            needed: lamports,
-            available: source_lamports.saturating_sub(meta.rent_exempt_reserve),
-        });
-    }
-
-    // Check rent on split account
-    let split_rent_exempt = {
-        let acc = ctx.get_account(stake_idx)?;
-        sysvars.rent().minimum_balance(acc.account.data.len())
-    };
-
-    // Build split state
-    let split_state = if let Some(ref original_stake) = stake_opt {
-        let original_total = source_lamports.saturating_sub(meta.rent_exempt_reserve);
-        let split_stake_amount = if original_total > 0 {
-            (original_stake.delegation.stake as u128 * lamports as u128 / original_total as u128)
-                as u64
-        } else {
-            0
-        };
-
-        let split_delegation = Delegation {
-            voter_pubkey: original_stake.delegation.voter_pubkey,
-            stake: split_stake_amount,
-            activation_epoch: original_stake.delegation.activation_epoch,
-            deactivation_epoch: original_stake.delegation.deactivation_epoch,
-            warmup_cooldown_rate_bps: original_stake.delegation.warmup_cooldown_rate_bps,
-        };
-
-        StakeStateV2::Stake(
-            Meta {
-                rent_exempt_reserve: split_rent_exempt,
-                authorized: meta.authorized.clone(),
-                lockup: meta.lockup.clone(),
-            },
-            Stake {
-                delegation: split_delegation,
-                credits_observed: original_stake.credits_observed,
-            },
-        )
-    } else {
-        StakeStateV2::Initialized(Meta {
-            rent_exempt_reserve: split_rent_exempt,
-            authorized: meta.authorized.clone(),
-            lockup: meta.lockup.clone(),
-        })
-    };
-
-    let split_data =
-        borsh::to_vec(&split_state).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-    // Update source: reduce lamports and stake
-    if let Some(mut original_stake) = stake_opt {
-        let original_total = source_lamports.saturating_sub(meta.rent_exempt_reserve);
-        let split_stake_amount = if original_total > 0 {
-            (original_stake.delegation.stake as u128 * lamports as u128 / original_total as u128)
-                as u64
-        } else {
-            0
-        };
-        original_stake.delegation.stake -= split_stake_amount;
-
-        let updated_source = StakeStateV2::Stake(meta, original_stake);
-        let source_data = borsh::to_vec(&updated_source)
-            .map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
-
-        let acc = ctx.get_account_mut(stake_idx)?;
-        acc.account.lamports -= lamports;
-        acc.account.data = source_data;
-    } else {
-        let acc = ctx.get_account_mut(stake_idx)?;
-        acc.account.lamports -= lamports;
-    }
-
-    // Configure split account
-    {
-        let acc = ctx.get_account_mut(split_idx)?;
-        acc.account.lamports = acc
-            .account
-            .lamports
-            .checked_add(lamports)
-            .ok_or(RuntimeError::LamportsOverflow)?;
-        acc.account.data = split_data;
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use nusantara_core::program::STAKE_PROGRAM_ID;
-    use nusantara_core::{Account, EpochSchedule, Message};
+    use nusantara_core::{Account, Message};
     use nusantara_crypto::{Hash, hash};
     use nusantara_rent_program::Rent;
-    use nusantara_sysvar_program::{Clock, RecentBlockhashes, SlotHashes, StakeHistory};
+    use nusantara_stake_program::{Authorized, Lockup, Meta, StakeStateV2};
+
+    use crate::test_utils::test_sysvars_with_clock;
+    use crate::sysvar_cache::SysvarCache;
+    use crate::transaction_context::TransactionContext;
 
     fn test_sysvars() -> SysvarCache {
-        SysvarCache::new(
-            Clock {
-                slot: 100,
-                epoch: 5,
-                unix_timestamp: 1_000_000,
-                ..Clock::default()
-            },
-            Rent::default(),
-            EpochSchedule::default(),
-            SlotHashes::default(),
-            StakeHistory::default(),
-            RecentBlockhashes::default(),
-        )
+        test_sysvars_with_clock(100, 5, 1_000_000)
     }
 
     fn setup_stake_init() -> (TransactionContext, Vec<u8>, Vec<u8>, SysvarCache) {

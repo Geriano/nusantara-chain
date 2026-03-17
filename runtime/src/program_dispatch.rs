@@ -1,19 +1,20 @@
-use nusantara_core::program::{
-    COMPUTE_BUDGET_PROGRAM_ID, LOADER_PROGRAM_ID, RENT_PROGRAM_ID, STAKE_PROGRAM_ID,
-    SYSTEM_PROGRAM_ID, SYSVAR_PROGRAM_ID, TOKEN_PROGRAM_ID, VOTE_PROGRAM_ID,
-};
+use std::sync::LazyLock;
+
+use nusantara_core::program::{RENT_PROGRAM_ID, SYSVAR_PROGRAM_ID};
 use nusantara_crypto::Hash;
 use nusantara_vm::ProgramCache;
 
+use crate::cost_schedule::{INSTRUCTION_BASE_COST, INSTRUCTION_DATA_BYTE_COST};
 use crate::error::RuntimeError;
-use crate::processors;
+use crate::program_processor::ProcessorRegistry;
 use crate::sysvar_cache::SysvarCache;
 use crate::transaction_context::TransactionContext;
 use crate::wasm_dispatch::dispatch_wasm_program;
 
-pub const INSTRUCTION_BASE_COST: u64 = 200;
-pub const INSTRUCTION_DATA_BYTE_COST: u64 = 1;
-pub const SIGNATURE_VERIFY_COST: u64 = 2000;
+// Re-export for backward compatibility (used by transaction_executor.rs)
+pub use crate::cost_schedule::SIGNATURE_VERIFY_COST;
+
+static REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(ProcessorRegistry::new_with_defaults);
 
 pub fn dispatch_instruction(
     program_id: &Hash,
@@ -27,51 +28,31 @@ pub fn dispatch_instruction(
     let base_cost = INSTRUCTION_BASE_COST + data.len() as u64 * INSTRUCTION_DATA_BYTE_COST;
     ctx.consume_compute(base_cost)?;
 
-    if *program_id == *SYSTEM_PROGRAM_ID {
-        processors::system::process_system(accounts, data, ctx, sysvars)
-    } else if *program_id == *STAKE_PROGRAM_ID {
-        processors::stake::process_stake(accounts, data, ctx, sysvars)
-    } else if *program_id == *VOTE_PROGRAM_ID {
-        processors::vote::process_vote(accounts, data, ctx, sysvars)
-    } else if *program_id == *COMPUTE_BUDGET_PROGRAM_ID {
-        processors::compute_budget::process_compute_budget(accounts, data, ctx)
-    } else if *program_id == *SYSVAR_PROGRAM_ID || *program_id == *RENT_PROGRAM_ID {
-        Err(RuntimeError::UnknownProgram(
+    // Reject non-executable built-in programs
+    if *program_id == *SYSVAR_PROGRAM_ID || *program_id == *RENT_PROGRAM_ID {
+        return Err(RuntimeError::UnknownProgram(
             "sysvar and rent programs are not executable".to_string(),
-        ))
-    } else if *program_id == *LOADER_PROGRAM_ID {
-        processors::loader::process_loader(accounts, data, ctx, sysvars, program_cache)
-    } else if *program_id == *TOKEN_PROGRAM_ID {
-        processors::token::process_token(accounts, data, ctx, sysvars)
-    } else {
-        // Try dispatching as a WASM program
-        dispatch_wasm_program(program_id, accounts, data, ctx, sysvars, program_cache)
+        ));
     }
+
+    // Try native processor registry
+    if let Some(processor) = REGISTRY.find(program_id) {
+        return processor.process(accounts, data, ctx, sysvars, program_cache);
+    }
+
+    // Fallback to WASM dispatch
+    dispatch_wasm_program(program_id, accounts, data, ctx, sysvars, program_cache)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use nusantara_core::instruction::Instruction;
+    use nusantara_core::program::{COMPUTE_BUDGET_PROGRAM_ID, SYSTEM_PROGRAM_ID};
     use nusantara_core::{Account, Message};
     use nusantara_crypto::hash;
-    use nusantara_rent_program::Rent;
-    use nusantara_sysvar_program::{Clock, RecentBlockhashes, SlotHashes, StakeHistory};
 
-    fn test_sysvars() -> SysvarCache {
-        SysvarCache::new(
-            Clock::default(),
-            Rent::default(),
-            nusantara_core::EpochSchedule::default(),
-            SlotHashes::default(),
-            StakeHistory::default(),
-            RecentBlockhashes::default(),
-        )
-    }
-
-    fn test_cache() -> ProgramCache {
-        ProgramCache::new(16)
-    }
+    use crate::test_utils::{test_cache, test_sysvars};
 
     fn make_ctx_for_program(program_id: Hash) -> (TransactionContext, Vec<u8>, Vec<u8>) {
         let payer = hash(b"payer");
