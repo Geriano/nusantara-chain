@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use nusantara_crypto::{Hash, Keypair, PublicKey};
+use nusantara_crypto::{Hash, Keypair, PublicKey, hashv};
 use parking_lot::RwLock;
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,6 +13,7 @@ use crate::crds_gossip_pull::CrdsGossipPull;
 use crate::crds_gossip_push::CrdsGossipPush;
 use crate::crds_value::{CrdsData, CrdsValue, CrdsVote};
 use crate::ping_pong::PingCache;
+use crate::protocol::PruneMessage;
 
 pub struct ClusterInfo {
     keypair: Arc<Keypair>,
@@ -107,25 +109,40 @@ impl ClusterInfo {
 
     /// Insert a CRDS value received from the network after verifying its signature.
     /// For ContactInfo, the pubkey is embedded; for other types, looks up the
-    /// origin's pubkey from existing CRDS entries. Unverifiable values from
-    /// unknown peers are accepted (their ContactInfo hasn't arrived yet).
+    /// origin's pubkey from existing CRDS entries.
+    ///
+    /// Non-ContactInfo values from unknown peers are REJECTED (prevents accepting
+    /// unverifiable data that could poison the CRDS table).
     pub fn insert_verified_crds_value(&self, value: CrdsValue) -> bool {
         let pubkey = match &value.data {
             CrdsData::ContactInfo(ci) => Some(ci.pubkey.clone()),
             _ => self.get_pubkey(&value.origin()),
         };
 
-        if let Some(pk) = pubkey && !value.verify(&pk) {
-            metrics::counter!("gossip_invalid_signature_total").increment(1);
-            tracing::debug!(
-                origin = ?value.origin(),
-                label = %value.label(),
-                "dropping CRDS value with invalid signature"
-            );
-            return false;
+        match pubkey {
+            Some(pk) => {
+                if !value.verify(&pk) {
+                    metrics::counter!("gossip_invalid_signature_total").increment(1);
+                    tracing::debug!(
+                        origin = ?value.origin(),
+                        label = %value.label(),
+                        "dropping CRDS value with invalid signature"
+                    );
+                    return false;
+                }
+            }
+            None => {
+                // Non-ContactInfo from unknown peer — reject
+                metrics::counter!("gossip_unverifiable_value_dropped_total").increment(1);
+                tracing::debug!(
+                    origin = ?value.origin(),
+                    label = %value.label(),
+                    "rejecting unverifiable non-ContactInfo from unknown peer"
+                );
+                return false;
+            }
         }
-        // If we can't look up the pubkey (unknown peer), accept optimistically.
-        // Their ContactInfo will arrive eventually and we can verify then.
+
         self.crds.insert(value).is_ok()
     }
 
@@ -160,16 +177,13 @@ impl ClusterInfo {
     }
 
     /// Get peers with stakes for push/pull operations.
-    pub fn peers_with_stakes(&self, stakes: &[(Hash, u64)]) -> Vec<(ContactInfo, u64)> {
+    /// Uses HashMap for O(1) stake lookups.
+    pub fn peers_with_stakes(&self, stakes: &HashMap<Hash, u64>) -> Vec<(ContactInfo, u64)> {
         let peers = self.all_peers();
         peers
             .into_iter()
             .map(|ci| {
-                let stake = stakes
-                    .iter()
-                    .find(|(id, _)| *id == ci.identity)
-                    .map(|(_, s)| *s)
-                    .unwrap_or(1); // default stake of 1 for unknown peers
+                let stake = stakes.get(&ci.identity).copied().unwrap_or(1);
                 (ci, stake)
             })
             .collect()
@@ -212,6 +226,34 @@ impl ClusterInfo {
             })
             .collect();
         (votes, new_cursor)
+    }
+
+    /// Create a signed prune message for sending to a peer.
+    pub fn create_signed_prune_message(
+        &self,
+        prunes: Vec<Hash>,
+        destination: Hash,
+    ) -> PruneMessage {
+        let wallclock = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_millis() as u64;
+
+        let sign_data = hashv(&[
+            b"prune",
+            &borsh::to_vec(&prunes).unwrap_or_default(),
+            destination.as_bytes(),
+            &wallclock.to_le_bytes(),
+        ]);
+        let signature = self.keypair.sign(sign_data.as_bytes());
+
+        PruneMessage {
+            from: self.my_identity(),
+            prunes,
+            destination,
+            wallclock,
+            signature,
+        }
     }
 }
 
@@ -326,5 +368,64 @@ mod tests {
         // Forged value should be rejected (pubkey in ContactInfo != signer)
         assert!(!ci.insert_verified_crds_value(forged));
         assert_eq!(ci.peer_count(), 0);
+    }
+
+    #[test]
+    fn verified_insert_rejects_vote_from_unknown_peer() {
+        let ci = make_cluster_info();
+        let unknown_kp = Keypair::generate();
+
+        // Vote from peer whose ContactInfo hasn't been inserted yet
+        let vote = CrdsVote {
+            from: unknown_kp.address(),
+            slot: 1,
+            hash: Hash::zero(),
+            wallclock: 1000,
+        };
+        let value = CrdsValue::new_signed(CrdsData::Vote(vote), &unknown_kp);
+
+        // Should be rejected: unknown peer, non-ContactInfo
+        assert!(!ci.insert_verified_crds_value(value));
+    }
+
+    #[test]
+    fn verified_insert_accepts_contact_info_from_unknown_peer() {
+        let ci = make_cluster_info();
+        let new_kp = Keypair::generate();
+
+        // ContactInfo from new peer (always self-verifiable)
+        let new_ci = ContactInfo::new(
+            new_kp.public_key().clone(),
+            "127.0.0.1:9000".parse().unwrap(),
+            "127.0.0.1:9003".parse().unwrap(),
+            "127.0.0.1:9004".parse().unwrap(),
+            "127.0.0.1:9001".parse().unwrap(),
+            "127.0.0.1:9002".parse().unwrap(),
+            1,
+            1000,
+        );
+        let value = CrdsValue::new_signed(CrdsData::ContactInfo(new_ci), &new_kp);
+        assert!(ci.insert_verified_crds_value(value));
+    }
+
+    #[test]
+    fn create_and_verify_prune_message() {
+        let ci = make_cluster_info();
+        let dest = Hash::zero();
+        let prunes = vec![Hash::zero()];
+
+        let prune = ci.create_signed_prune_message(prunes.clone(), dest);
+        assert_eq!(prune.from, ci.my_identity());
+        assert_eq!(prune.prunes, prunes);
+        assert_eq!(prune.destination, dest);
+
+        // Verify the signature
+        let sign_data = hashv(&[
+            b"prune",
+            &borsh::to_vec(&prune.prunes).unwrap_or_default(),
+            prune.destination.as_bytes(),
+            &prune.wallclock.to_le_bytes(),
+        ]);
+        assert!(prune.signature.verify(ci.keypair().public_key(), sign_data.as_bytes()).is_ok());
     }
 }

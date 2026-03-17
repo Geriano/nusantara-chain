@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use nusantara_core::native_token::const_parse_u64;
 use nusantara_crypto::{Hash, hashv};
 
@@ -12,11 +14,11 @@ pub struct TurbineTree {
 impl TurbineTree {
     /// Build a turbine tree for the given slot.
     /// `cluster_nodes` is all nodes (including leader).
-    /// `stakes` maps identity -> stake amount.
+    /// `stakes` maps identity -> stake amount (O(1) lookup).
     pub fn new(
         leader: Hash,
         cluster_nodes: &[Hash],
-        stakes: &[(Hash, u64)],
+        stakes: &HashMap<Hash, u64>,
         slot: u64,
         fanout: usize,
     ) -> Self {
@@ -28,11 +30,7 @@ impl TurbineTree {
             .iter()
             .filter(|n| **n != leader)
             .map(|n| {
-                let stake = stakes
-                    .iter()
-                    .find(|(id, _)| id == n)
-                    .map(|(_, s)| *s)
-                    .unwrap_or(1);
+                let stake = stakes.get(n).copied().unwrap_or(1);
                 (*n, stake)
             })
             .collect();
@@ -149,7 +147,7 @@ mod tests {
     fn leader_sends_to_layer_0() {
         let leader = hash(b"leader");
         let nodes: Vec<Hash> = (0..100).map(|i| hash(&(i as u64).to_le_bytes())).collect();
-        let stakes: Vec<(Hash, u64)> = nodes.iter().map(|n| (*n, 100)).collect();
+        let stakes: HashMap<Hash, u64> = nodes.iter().map(|n| (*n, 100)).collect();
 
         let tree = TurbineTree::new(leader, &nodes, &stakes, 1, 32);
         let peers = tree.retransmit_peers(&leader);
@@ -160,7 +158,7 @@ mod tests {
     fn layer_0_node_sends_to_layer_1() {
         let leader = hash(b"leader");
         let nodes: Vec<Hash> = (0..200).map(|i| hash(&(i as u64).to_le_bytes())).collect();
-        let stakes: Vec<(Hash, u64)> = nodes.iter().map(|n| (*n, 100)).collect();
+        let stakes: HashMap<Hash, u64> = nodes.iter().map(|n| (*n, 100)).collect();
 
         let tree = TurbineTree::new(leader, &nodes, &stakes, 1, 4);
 
@@ -177,7 +175,7 @@ mod tests {
     fn deterministic_per_slot() {
         let leader = hash(b"leader");
         let nodes: Vec<Hash> = (0..50).map(|i| hash(&(i as u64).to_le_bytes())).collect();
-        let stakes: Vec<(Hash, u64)> = nodes.iter().map(|n| (*n, 100)).collect();
+        let stakes: HashMap<Hash, u64> = nodes.iter().map(|n| (*n, 100)).collect();
 
         let tree1 = TurbineTree::new(leader, &nodes, &stakes, 5, 32);
         let tree2 = TurbineTree::new(leader, &nodes, &stakes, 5, 32);
@@ -191,7 +189,7 @@ mod tests {
     fn different_slots_different_topology() {
         let leader = hash(b"leader");
         let nodes: Vec<Hash> = (0..50).map(|i| hash(&(i as u64).to_le_bytes())).collect();
-        let stakes: Vec<(Hash, u64)> = nodes.iter().map(|n| (*n, 100)).collect();
+        let stakes: HashMap<Hash, u64> = nodes.iter().map(|n| (*n, 100)).collect();
 
         let tree1 = TurbineTree::new(leader, &nodes, &stakes, 1, 32);
         let tree2 = TurbineTree::new(leader, &nodes, &stakes, 2, 32);
@@ -205,7 +203,7 @@ mod tests {
     fn unknown_node_empty_peers() {
         let leader = hash(b"leader");
         let nodes: Vec<Hash> = (0..10).map(|i| hash(&(i as u64).to_le_bytes())).collect();
-        let stakes: Vec<(Hash, u64)> = nodes.iter().map(|n| (*n, 100)).collect();
+        let stakes: HashMap<Hash, u64> = nodes.iter().map(|n| (*n, 100)).collect();
 
         let tree = TurbineTree::new(leader, &nodes, &stakes, 1, 4);
         let unknown = hash(b"unknown");
@@ -216,7 +214,7 @@ mod tests {
     fn layer_of_calculation() {
         let leader = hash(b"leader");
         let nodes: Vec<Hash> = (0..100).map(|i| hash(&(i as u64).to_le_bytes())).collect();
-        let stakes: Vec<(Hash, u64)> = nodes.iter().map(|n| (*n, 100)).collect();
+        let stakes: HashMap<Hash, u64> = nodes.iter().map(|n| (*n, 100)).collect();
 
         let tree = TurbineTree::new(leader, &nodes, &stakes, 1, 10);
         assert_eq!(tree.layer_of(&leader), None); // Leader has no layer

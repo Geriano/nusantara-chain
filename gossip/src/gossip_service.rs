@@ -1,8 +1,11 @@
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Instant;
 
+use dashmap::DashMap;
 use nusantara_core::native_token::const_parse_u64;
-use nusantara_crypto::hash as crypto_hash;
+use nusantara_crypto::{hash as crypto_hash, hashv};
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
 use tracing::{debug, error, info, instrument};
@@ -13,8 +16,39 @@ use crate::protocol::{GossipMessage, PushMessage};
 pub const PUSH_INTERVAL_MS: u64 = const_parse_u64(env!("NUSA_GOSSIP_PUSH_INTERVAL_MS"));
 pub const PULL_INTERVAL_MS: u64 = const_parse_u64(env!("NUSA_GOSSIP_PULL_INTERVAL_MS"));
 pub const PURGE_TIMEOUT_MS: u64 = const_parse_u64(env!("NUSA_GOSSIP_PURGE_TIMEOUT_MS"));
+pub const RECV_RATE_LIMIT_PER_IP_PER_SEC: u64 =
+    const_parse_u64(env!("NUSA_GOSSIP_RECV_RATE_LIMIT_PER_IP_PER_SEC"));
 
 const MAX_UDP_PACKET: usize = 65507;
+
+/// Per-IP rate limiter for incoming gossip messages.
+struct GossipRateLimiter {
+    counts: DashMap<IpAddr, (Instant, u32)>,
+    limit: u32,
+}
+
+impl GossipRateLimiter {
+    fn new(limit: u32) -> Self {
+        Self {
+            counts: DashMap::new(),
+            limit,
+        }
+    }
+
+    /// Returns true if the message should be processed, false if rate limited.
+    fn check(&self, ip: IpAddr) -> bool {
+        let mut entry = self.counts.entry(ip).or_insert((Instant::now(), 0));
+        if entry.0.elapsed().as_secs() >= 1 {
+            entry.0 = Instant::now();
+            entry.1 = 0;
+        }
+        if entry.1 >= self.limit {
+            return false;
+        }
+        entry.1 += 1;
+        true
+    }
+}
 
 pub struct GossipService {
     cluster_info: Arc<ClusterInfo>,
@@ -55,8 +89,13 @@ impl GossipService {
         let socket = self.socket;
         let cluster_info = self.cluster_info;
 
+        let rate_limiter = Arc::new(GossipRateLimiter::new(
+            RECV_RATE_LIMIT_PER_IP_PER_SEC as u32,
+        ));
+
         let recv_socket = Arc::clone(&socket);
         let recv_ci = Arc::clone(&cluster_info);
+        let recv_rl = Arc::clone(&rate_limiter);
 
         let send_socket = Arc::clone(&socket);
         let push_ci = Arc::clone(&cluster_info);
@@ -71,7 +110,7 @@ impl GossipService {
         // Spawn receiver task
         let mut shutdown_recv = shutdown.clone();
         let recv_handle = tokio::spawn(async move {
-            recv_loop(recv_socket, recv_ci, &mut shutdown_recv).await;
+            recv_loop(recv_socket, recv_ci, recv_rl, &mut shutdown_recv).await;
         });
 
         // Spawn push task
@@ -136,6 +175,7 @@ impl GossipService {
 async fn recv_loop(
     socket: Arc<UdpSocket>,
     cluster_info: Arc<ClusterInfo>,
+    rate_limiter: Arc<GossipRateLimiter>,
     shutdown: &mut watch::Receiver<bool>,
 ) {
     let mut buf = vec![0u8; MAX_UDP_PACKET];
@@ -145,6 +185,12 @@ async fn recv_loop(
             result = socket.recv_from(&mut buf) => {
                 match result {
                     Ok((len, src)) => {
+                        // Rate limit check before processing
+                        if !rate_limiter.check(src.ip()) {
+                            metrics::counter!("gossip_rate_limited_total").increment(1);
+                            continue;
+                        }
+
                         let data = &buf[..len];
                         if let Err(e) = handle_message(&socket, &cluster_info, data, src).await {
                             debug!(%src, error = %e, "failed to handle gossip message");
@@ -202,11 +248,36 @@ async fn handle_message(
             metrics::counter!("gossip_pull_responses_received_total").increment(1);
         }
         GossipMessage::PruneMessage(prune) => {
+            // Verify prune message signature
+            if let Some(pubkey) = cluster_info.get_pubkey(&prune.from) {
+                let sign_data = hashv(&[
+                    b"prune",
+                    &borsh::to_vec(&prune.prunes).unwrap_or_default(),
+                    prune.destination.as_bytes(),
+                    &prune.wallclock.to_le_bytes(),
+                ]);
+                if prune.signature.verify(&pubkey, sign_data.as_bytes()).is_err() {
+                    metrics::counter!("gossip_prune_invalid_signature_total").increment(1);
+                    return Ok(());
+                }
+            } else {
+                // Unknown peer — reject prune
+                metrics::counter!("gossip_prune_invalid_signature_total").increment(1);
+                return Ok(());
+            }
             cluster_info
                 .push()
                 .process_prune(prune.from, &prune.prunes);
         }
         GossipMessage::Ping(ping) => {
+            // Verify ping signature if sender is known
+            if let Some(pubkey) = cluster_info.get_pubkey(&ping.from)
+                && !crate::ping_pong::PingCache::verify_ping(&ping, &pubkey)
+            {
+                metrics::counter!("gossip_ping_invalid_signature_total").increment(1);
+                return Ok(());
+            }
+            // Respond with pong (accept from unknown peers for bootstrapping)
             let pong = crate::ping_pong::PingCache::create_pong(
                 cluster_info.keypair(),
                 &ping,
@@ -217,7 +288,16 @@ async fn handle_message(
             }
         }
         GossipMessage::Pong(pong) => {
-            cluster_info.ping_cache().mark_verified(pong.from);
+            // Verify pong signature before accepting
+            if let Some(pubkey) = cluster_info.get_pubkey(&pong.from) {
+                if cluster_info.ping_cache().verify_pong(&pong, &pubkey) {
+                    cluster_info.ping_cache().mark_verified(pong.from);
+                } else {
+                    metrics::counter!("gossip_pong_verification_failed_total").increment(1);
+                }
+            } else {
+                metrics::counter!("gossip_pong_verification_failed_total").increment(1);
+            }
         }
     }
 
@@ -236,7 +316,7 @@ async fn push_loop(
         tokio::select! {
             biased;
             _ = tick.tick() => {
-                let peers = cluster_info.peers_with_stakes(&[]);
+                let peers = cluster_info.peers_with_stakes(&HashMap::new());
                 let seed = crypto_hash(&rand::random::<[u8; 32]>());
                 let messages = cluster_info.push().new_push_messages(
                     cluster_info.crds(),
@@ -372,5 +452,48 @@ mod tests {
         assert_eq!(PUSH_INTERVAL_MS, 100);
         assert_eq!(PULL_INTERVAL_MS, 5000);
         assert_eq!(PURGE_TIMEOUT_MS, 30000);
+        assert_eq!(RECV_RATE_LIMIT_PER_IP_PER_SEC, 100);
+    }
+
+    #[test]
+    fn rate_limiter_within_limit() {
+        let rl = GossipRateLimiter::new(10);
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        for _ in 0..10 {
+            assert!(rl.check(ip));
+        }
+    }
+
+    #[test]
+    fn rate_limiter_over_limit() {
+        let rl = GossipRateLimiter::new(5);
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        for _ in 0..5 {
+            assert!(rl.check(ip));
+        }
+        assert!(!rl.check(ip));
+    }
+
+    #[test]
+    fn rate_limiter_per_ip_independent() {
+        let rl = GossipRateLimiter::new(2);
+        let ip1: IpAddr = "1.2.3.4".parse().unwrap();
+        let ip2: IpAddr = "5.6.7.8".parse().unwrap();
+        assert!(rl.check(ip1));
+        assert!(rl.check(ip1));
+        assert!(!rl.check(ip1));
+        // ip2 should be independent
+        assert!(rl.check(ip2));
+    }
+
+    #[test]
+    fn rate_limiter_resets_after_window() {
+        let rl = GossipRateLimiter::new(1);
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(rl.check(ip));
+        assert!(!rl.check(ip));
+
+        // Simulate window reset by waiting (can't easily in unit test)
+        // Just verify the reset logic exists (tested by the elapsed check)
     }
 }

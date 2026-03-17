@@ -2,10 +2,14 @@ use std::collections::BTreeMap;
 
 use dashmap::DashMap;
 use nusantara_core::block::Block;
+use nusantara_core::native_token::const_parse_u64;
 use nusantara_storage::shred::DataShred;
 
 use crate::deshredder::Deshredder;
 use crate::signed_shred::SignedDataShred;
+
+pub const MAX_SHREDS_PER_SLOT: u64 =
+    const_parse_u64(env!("NUSA_TURBINE_MAX_SHREDS_PER_SLOT"));
 
 struct SlotShreds {
     data_shreds: BTreeMap<u32, DataShred>,
@@ -20,11 +24,24 @@ impl SlotShreds {
         }
     }
 
-    fn insert(&mut self, shred: &SignedDataShred) {
+    /// Insert a shred, enforcing the per-slot shred count limit.
+    /// Returns false if the shred was rejected due to limits.
+    fn insert(&mut self, shred: &SignedDataShred) -> bool {
+        // Reject if shred index exceeds max
+        if shred.index() >= MAX_SHREDS_PER_SLOT as u32 {
+            metrics::counter!("turbine_shreds_rejected_max_index").increment(1);
+            return false;
+        }
+        // Reject if slot already has too many shreds
+        if self.data_shreds.len() >= MAX_SHREDS_PER_SLOT as usize {
+            metrics::counter!("turbine_shreds_rejected_max_index").increment(1);
+            return false;
+        }
         if shred.is_last() {
             self.last_index = Some(shred.index());
         }
         self.data_shreds.insert(shred.index(), shred.shred.clone());
+        true
     }
 
     fn is_complete(&self) -> bool {
@@ -78,7 +95,9 @@ impl ShredCollector {
         }
 
         let mut entry = self.slots.entry(slot).or_insert_with(SlotShreds::new);
-        entry.insert(shred);
+        if !entry.insert(shred) {
+            return None;
+        }
 
         if entry.is_complete() {
             let sorted = entry.to_sorted_shreds();
@@ -304,6 +323,41 @@ mod tests {
         // Repair request for stored slot should be a no-op
         collector.request_slot_repair(5);
         assert!(!collector.has_slot(5));
+    }
+
+    #[test]
+    fn rejects_shred_above_max_index() {
+        let kp = Keypair::generate();
+        let collector = ShredCollector::new();
+
+        // Create a shred with index at MAX
+        let shred = nusantara_storage::shred::DataShred {
+            slot: 1,
+            index: MAX_SHREDS_PER_SLOT as u32,
+            parent_offset: 1,
+            data: vec![0u8; 10],
+            flags: 0,
+        };
+        let signed = SignedDataShred::new(shred, kp.address(), &kp);
+        assert!(collector.insert_data_shred(&signed).is_none());
+    }
+
+    #[test]
+    fn accepts_shred_within_limit() {
+        let kp = Keypair::generate();
+        let collector = ShredCollector::new();
+
+        let shred = nusantara_storage::shred::DataShred {
+            slot: 1,
+            index: 0,
+            parent_offset: 1,
+            data: vec![0u8; 10],
+            flags: 0x01, // last shred
+        };
+        let signed = SignedDataShred::new(shred, kp.address(), &kp);
+        // Single shred with last flag should assemble a block (or at least be accepted)
+        let _ = collector.insert_data_shred(&signed);
+        assert!(collector.has_slot(1) || collector.is_slot_stored(1));
     }
 
     #[test]

@@ -64,6 +64,24 @@ impl ValidatorNode {
                     self.process_orphan_queue()?;
                     self.check_epoch_boundary(cli.snapshot_interval).await;
 
+                    // Periodically expire mempool transactions with stale blockhashes
+                    if self.current_slot.is_multiple_of(10) {
+                        let ancestry = self
+                            .replay_stage
+                            .fork_tree()
+                            .get_ancestry(self.current_slot);
+                        let valid_blockhashes: HashSet<Hash> = ancestry
+                            .iter()
+                            .filter_map(|&s| {
+                                self.replay_stage
+                                    .fork_tree()
+                                    .get_node(s)
+                                    .map(|n| n.block_hash)
+                            })
+                            .collect();
+                        self.mempool.remove_expired(&valid_blockhashes);
+                    }
+
                     // Periodically report gossip peer count
                     if self.current_slot.is_multiple_of(GOSSIP_REPORT_INTERVAL) {
                         let peer_count = self.cluster_info.peer_count();
@@ -252,7 +270,8 @@ impl ValidatorNode {
         if !peers.contains(&self.identity) {
             peers.push(self.identity);
         }
-        let stakes = self.bank.get_stake_distribution();
+        let stakes_vec = self.bank.get_stake_distribution();
+        let stakes: std::collections::HashMap<Hash, u64> = stakes_vec.into_iter().collect();
         let tree = TurbineTree::new(
             self.identity,
             &peers,

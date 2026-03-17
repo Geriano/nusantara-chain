@@ -106,7 +106,8 @@ impl ValidatorNode {
             if !peers.contains(&tree_identity) {
                 peers.push(tree_identity);
             }
-            let stakes = tree_bank.get_stake_distribution();
+            let stakes_vec = tree_bank.get_stake_distribution();
+            let stakes: std::collections::HashMap<Hash, u64> = stakes_vec.into_iter().collect();
             Some(TurbineTree::new(
                 leader,
                 &peers,

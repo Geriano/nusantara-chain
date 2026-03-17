@@ -7,7 +7,6 @@ use tokio::net::UdpSocket;
 use tracing::{debug, info, instrument};
 
 use crate::error::TurbineError;
-use crate::protocol::TurbineMessage;
 use crate::shredder::Shredder;
 use crate::signed_shred::SignedShred;
 use crate::turbine_tree::TurbineTree;
@@ -24,6 +23,8 @@ impl BroadcastStage {
 
     /// Shred a block and broadcast to layer-0 turbine peers.
     /// `addr_lookup` maps identity Hash to turbine SocketAddr.
+    ///
+    /// Pre-serializes all shred messages to avoid redundant per-peer serialization.
     #[instrument(skip(self, block, tree, addr_lookup), fields(slot = block.header.slot))]
     pub async fn broadcast_block<F>(
         &self,
@@ -52,16 +53,37 @@ impl BroadcastStage {
             "broadcasting block shreds"
         );
 
-        // Send all data shreds to layer-0 peers
+        // Pre-serialize all shred messages (one serialization per shred)
+        let mut serialized_shreds =
+            Vec::with_capacity(batch.data_shreds.len() + batch.code_shreds.len());
+
         for shred in &batch.data_shreds {
-            let signed = SignedShred::Data(shred.clone());
-            self.send_shred_to_peers(&signed, &peer_addrs).await;
+            let msg = crate::protocol::TurbineMessage::Shred(SignedShred::Data(shred.clone()));
+            match msg.serialize_to_bytes() {
+                Ok(bytes) => serialized_shreds.push(bytes),
+                Err(e) => {
+                    debug!(error = %e, "failed to serialize data shred message");
+                }
+            }
         }
 
-        // Send code shreds too
         for shred in &batch.code_shreds {
-            let signed = SignedShred::Code(shred.clone());
-            self.send_shred_to_peers(&signed, &peer_addrs).await;
+            let msg = crate::protocol::TurbineMessage::Shred(SignedShred::Code(shred.clone()));
+            match msg.serialize_to_bytes() {
+                Ok(bytes) => serialized_shreds.push(bytes),
+                Err(e) => {
+                    debug!(error = %e, "failed to serialize code shred message");
+                }
+            }
+        }
+
+        // Send all pre-serialized shreds to all layer-0 peers
+        for bytes in &serialized_shreds {
+            for addr in &peer_addrs {
+                if let Err(e) = self.socket.send_to(bytes, addr).await {
+                    debug!(%addr, error = %e, "failed to send shred");
+                }
+            }
         }
 
         metrics::counter!("turbine_broadcast_total").increment(1);
@@ -69,22 +91,5 @@ impl BroadcastStage {
             .record((batch.data_shreds.len() + batch.code_shreds.len()) as f64);
 
         Ok(())
-    }
-
-    async fn send_shred_to_peers(&self, shred: &SignedShred, peer_addrs: &[SocketAddr]) {
-        let msg = TurbineMessage::Shred(shred.clone());
-        let bytes = match msg.serialize_to_bytes() {
-            Ok(b) => b,
-            Err(e) => {
-                debug!(error = %e, "failed to serialize shred message");
-                return;
-            }
-        };
-
-        for addr in peer_addrs {
-            if let Err(e) = self.socket.send_to(&bytes, addr).await {
-                debug!(%addr, error = %e, "failed to send shred");
-            }
-        }
     }
 }

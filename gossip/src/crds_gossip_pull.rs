@@ -10,6 +10,9 @@ use crate::protocol::{PullRequest, PullResponse};
 pub const MAX_PULL_RESPONSE_VALUES: u64 =
     const_parse_u64(env!("NUSA_GOSSIP_MAX_PULL_RESPONSE_VALUES"));
 
+/// Maximum pull response size in bytes (UDP-safe, below 65535 MTU).
+const MAX_PULL_RESPONSE_SIZE: usize = 65000;
+
 pub struct CrdsGossipPull {
     my_identity: Hash,
 }
@@ -45,6 +48,7 @@ impl CrdsGossipPull {
     }
 
     /// Process a pull request: return values not in the requester's bloom filter.
+    /// Uses size-aware accumulation to prevent MTU overflow.
     pub fn process_pull_request(
         &self,
         crds: &CrdsTable,
@@ -52,14 +56,27 @@ impl CrdsGossipPull {
     ) -> PullResponse {
         let all_values = crds.values_since(0);
 
-        let response_values: Vec<CrdsValue> = all_values
-            .into_iter()
-            .filter(|v| {
-                let label_bytes = borsh::to_vec(&v.label()).unwrap_or_default();
-                !request.filter.contains(&label_bytes)
-            })
-            .take(MAX_PULL_RESPONSE_VALUES as usize)
-            .collect();
+        let mut response_values = Vec::new();
+        let mut total_size: usize = 0;
+
+        for v in all_values {
+            let label_bytes = borsh::to_vec(&v.label()).unwrap_or_default();
+            if request.filter.contains(&label_bytes) {
+                continue;
+            }
+
+            let value_size = estimate_crds_value_size(&v);
+            if total_size + value_size > MAX_PULL_RESPONSE_SIZE {
+                metrics::counter!("gossip_pull_response_truncated_total").increment(1);
+                break;
+            }
+            if response_values.len() >= MAX_PULL_RESPONSE_VALUES as usize {
+                break;
+            }
+
+            total_size += value_size;
+            response_values.push(v);
+        }
 
         PullResponse {
             from: self.my_identity,
@@ -70,7 +87,7 @@ impl CrdsGossipPull {
     /// Process a pull response: verify and insert values into our CRDS table.
     /// Values with embedded pubkeys (ContactInfo) are verified directly.
     /// Other values are verified against known ContactInfo pubkeys in CRDS.
-    /// Unverifiable values from unknown peers are accepted optimistically.
+    /// Non-ContactInfo values from unknown peers are REJECTED.
     pub fn process_pull_response(&self, crds: &CrdsTable, response: &PullResponse) -> usize {
         let mut inserted = 0;
         for value in &response.values {
@@ -82,9 +99,18 @@ impl CrdsGossipPull {
                     .map(|ci| ci.pubkey.clone()),
             };
 
-            if let Some(pk) = &pubkey && !value.verify(pk) {
-                metrics::counter!("gossip_pull_invalid_signature_total").increment(1);
-                continue;
+            match &pubkey {
+                Some(pk) => {
+                    if !value.verify(pk) {
+                        metrics::counter!("gossip_pull_invalid_signature_total").increment(1);
+                        continue;
+                    }
+                }
+                None => {
+                    // Non-ContactInfo from unknown peer — reject
+                    metrics::counter!("gossip_unverifiable_value_dropped_total").increment(1);
+                    continue;
+                }
             }
 
             if crds.insert(value.clone()).is_ok() {
@@ -96,6 +122,21 @@ impl CrdsGossipPull {
         }
         inserted
     }
+}
+
+/// Estimate the borsh-serialized size of a CRDS value (approximate).
+fn estimate_crds_value_size(value: &CrdsValue) -> usize {
+    // Signature is fixed-size (3309 bytes for Dilithium3)
+    // Data varies by variant
+    let data_size = match &value.data {
+        CrdsData::ContactInfo(_) => 2200, // pubkey(1952) + addrs + fields
+        CrdsData::Vote(_) => 200,         // from(64) + slot(8) + hash(64) + wallclock(8)
+        CrdsData::EpochSlots(es) => 100 + es.slots.len() * 8,
+        CrdsData::LowestSlot(_) => 150,
+        CrdsData::SlashProof(_) => 350,
+    };
+    // enum tag(1) + data_size + signature(3309)
+    1 + data_size + 3309
 }
 
 #[cfg(test)]
@@ -189,5 +230,32 @@ mod tests {
 
         // Node 2's value should be filtered by bloom
         assert!(resp.values.is_empty());
+    }
+
+    #[test]
+    fn pull_response_rejects_unverifiable_non_contact_info() {
+        let kp1 = Keypair::generate();
+        let unknown_kp = Keypair::generate();
+        let crds = CrdsTable::new();
+        let pull = CrdsGossipPull::new(kp1.address());
+
+        // Forge a vote from an unknown peer
+        use crate::crds_value::CrdsVote;
+        let vote = CrdsVote {
+            from: unknown_kp.address(),
+            slot: 1,
+            hash: Hash::zero(),
+            wallclock: 1000,
+        };
+        let value = CrdsValue::new_signed(CrdsData::Vote(vote), &unknown_kp);
+
+        let resp = PullResponse {
+            from: unknown_kp.address(),
+            values: vec![value],
+        };
+
+        // Should reject: unknown peer, non-ContactInfo
+        let inserted = pull.process_pull_response(&crds, &resp);
+        assert_eq!(inserted, 0);
     }
 }

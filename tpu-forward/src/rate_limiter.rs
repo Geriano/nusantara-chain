@@ -40,11 +40,12 @@ impl RateLimiter {
     }
 
     /// Check if a transaction from the given IP is allowed.
+    /// Atomically increments counters to eliminate TOCTOU races.
     pub fn check_rate_limit(&self, ip: IpAddr) -> Result<(), crate::error::TpuError> {
-        // Check global rate
-        self.check_global_rate()?;
+        // Atomically check and increment global rate
+        self.check_and_increment_global()?;
 
-        // Check per-IP rate
+        // Check per-IP rate (DashMap entry holds shard lock for the entire operation)
         let mut entry = self.ip_states.entry(ip).or_insert_with(|| IpState {
             tx_count: 0,
             connection_count: 0,
@@ -58,6 +59,8 @@ impl RateLimiter {
         }
 
         if entry.tx_count >= self.max_tx_per_sec_per_ip {
+            // Undo the global increment since this tx is rejected
+            self.global_count.fetch_sub(1, Ordering::SeqCst);
             metrics::counter!("tpu_rate_limited_per_ip_total").increment(1);
             return Err(crate::error::TpuError::RateLimited {
                 reason: format!("per-IP limit exceeded: {ip}"),
@@ -65,19 +68,21 @@ impl RateLimiter {
         }
 
         entry.tx_count += 1;
-        self.global_count.fetch_add(1, Ordering::Relaxed);
-
         Ok(())
     }
 
-    fn check_global_rate(&self) -> Result<(), crate::error::TpuError> {
+    /// Atomically check the global rate limit and increment the counter.
+    /// On reject, the counter is not incremented (no cleanup needed).
+    fn check_and_increment_global(&self) -> Result<(), crate::error::TpuError> {
         let mut window_start = self.global_window_start.lock();
         if window_start.elapsed().as_secs() >= 1 {
-            self.global_count.store(0, Ordering::Relaxed);
+            self.global_count.store(0, Ordering::SeqCst);
             *window_start = Instant::now();
         }
 
-        if self.global_count.load(Ordering::Relaxed) >= self.max_tx_per_sec_global {
+        let count = self.global_count.fetch_add(1, Ordering::SeqCst);
+        if count >= self.max_tx_per_sec_global {
+            self.global_count.fetch_sub(1, Ordering::SeqCst);
             metrics::counter!("tpu_rate_limited_global_total").increment(1);
             return Err(crate::error::TpuError::RateLimited {
                 reason: "global rate limit exceeded".to_string(),
@@ -87,9 +92,10 @@ impl RateLimiter {
         Ok(())
     }
 
-    /// Check if a new connection from the given IP is allowed.
-    pub fn check_connection_limit(&self, ip: IpAddr) -> Result<(), crate::error::TpuError> {
-        let entry = self.ip_states.entry(ip).or_insert_with(|| IpState {
+    /// Atomically check connection limit and add a connection if within limit.
+    /// Eliminates the TOCTOU race between check_connection_limit + add_connection.
+    pub fn try_add_connection(&self, ip: IpAddr) -> Result<(), crate::error::TpuError> {
+        let mut entry = self.ip_states.entry(ip).or_insert_with(|| IpState {
             tx_count: 0,
             connection_count: 0,
             window_start: Instant::now(),
@@ -101,19 +107,8 @@ impl RateLimiter {
             });
         }
 
+        entry.connection_count += 1;
         Ok(())
-    }
-
-    /// Track a new connection from an IP.
-    pub fn add_connection(&self, ip: IpAddr) {
-        self.ip_states
-            .entry(ip)
-            .or_insert_with(|| IpState {
-                tx_count: 0,
-                connection_count: 0,
-                window_start: Instant::now(),
-            })
-            .connection_count += 1;
     }
 
     /// Track a connection close from an IP.
@@ -177,16 +172,44 @@ mod tests {
     }
 
     #[test]
-    fn connection_tracking() {
+    fn try_add_connection_atomic() {
         let limiter = RateLimiter::new();
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
         for _ in 0..MAX_CONNECTIONS_PER_IP {
-            limiter.add_connection(ip);
+            assert!(limiter.try_add_connection(ip).is_ok());
         }
-        assert!(limiter.check_connection_limit(ip).is_err());
+        assert!(limiter.try_add_connection(ip).is_err());
 
         limiter.remove_connection(ip);
-        assert!(limiter.check_connection_limit(ip).is_ok());
+        assert!(limiter.try_add_connection(ip).is_ok());
+    }
+
+    #[test]
+    fn concurrent_rate_limit_respects_global() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let limiter = Arc::new(RateLimiter::new());
+        let mut handles = Vec::new();
+
+        // Spawn many threads trying to check rate limit concurrently
+        for _ in 0..10 {
+            let l = Arc::clone(&limiter);
+            handles.push(thread::spawn(move || {
+                let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+                let mut count = 0u64;
+                for _ in 0..1000 {
+                    if l.check_rate_limit(ip).is_ok() {
+                        count += 1;
+                    }
+                }
+                count
+            }));
+        }
+
+        let total: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
+        // Total should not exceed global limit (may be slightly less due to per-IP limit)
+        assert!(total <= MAX_TX_PER_SECOND_GLOBAL);
     }
 }

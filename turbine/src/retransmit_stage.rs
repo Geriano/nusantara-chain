@@ -56,8 +56,19 @@ impl RetransmitStage {
                     let slot = shred.slot();
                     let leader = shred.leader();
 
-                    // Verify shred signature before retransmitting
-                    if let Some(pubkey) = pubkey_lookup(&leader) && !shred.verify(&pubkey) {
+                    // Step 1: Reject shreds from unknown leaders
+                    let Some(pubkey) = pubkey_lookup(&leader) else {
+                        warn!(
+                            slot,
+                            leader = ?leader,
+                            "dropping shred from unknown leader"
+                        );
+                        metrics::counter!("turbine_shreds_unknown_leader").increment(1);
+                        continue;
+                    };
+
+                    // Step 2: Verify shred signature
+                    if !shred.verify(&pubkey) {
                         warn!(
                             slot,
                             leader = ?leader,

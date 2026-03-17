@@ -9,8 +9,9 @@ pub struct TxValidator;
 
 impl TxValidator {
     /// Quick structural validation of a transaction.
-    /// Does NOT verify signatures (expensive Dilithium verification deferred to runtime).
-    pub fn validate(tx: &Transaction) -> Result<(), TpuError> {
+    /// `raw_size` is the byte size already read from the QUIC stream, avoiding
+    /// a redundant borsh re-serialization just to check size.
+    pub fn validate(tx: &Transaction, raw_size: usize) -> Result<(), TpuError> {
         // Check that there's at least one signature
         if tx.signatures.is_empty() {
             return Err(TpuError::InvalidTransaction(
@@ -34,13 +35,10 @@ impl TxValidator {
             )));
         }
 
-        // Check serialized size
-        let size = borsh::to_vec(tx)
-            .map_err(|e| TpuError::Serialization(e.to_string()))?
-            .len();
-        if size > MAX_TRANSACTION_SIZE as usize {
+        // Check size using the raw bytes already read (no re-serialization needed)
+        if raw_size > MAX_TRANSACTION_SIZE as usize {
             return Err(TpuError::TransactionTooLarge {
-                size,
+                size: raw_size,
                 max_size: MAX_TRANSACTION_SIZE as usize,
             });
         }
@@ -111,6 +109,11 @@ mod tests {
         tx
     }
 
+    /// Helper: get the borsh-serialized size of a transaction for the raw_size param.
+    fn tx_raw_size(tx: &Transaction) -> usize {
+        borsh::to_vec(tx).unwrap().len()
+    }
+
     #[test]
     fn config_values() {
         assert_eq!(MAX_TRANSACTION_SIZE, 65536);
@@ -119,7 +122,8 @@ mod tests {
     #[test]
     fn valid_transaction_passes() {
         let tx = valid_tx();
-        assert!(TxValidator::validate(&tx).is_ok());
+        let size = tx_raw_size(&tx);
+        assert!(TxValidator::validate(&tx, size).is_ok());
     }
 
     #[test]
@@ -133,7 +137,7 @@ mod tests {
             instructions: vec![],
         };
         let tx = Transaction::new(msg);
-        assert!(TxValidator::validate(&tx).is_err());
+        assert!(TxValidator::validate(&tx, 100).is_err());
     }
 
     #[test]
@@ -152,7 +156,7 @@ mod tests {
         let kp = Keypair::generate();
         tx.signatures = vec![kp.sign(&[0u8])];
         tx.signer_pubkeys = vec![kp.public_key().clone()];
-        let err = TxValidator::validate(&tx).unwrap_err().to_string();
+        let err = TxValidator::validate(&tx, 100).unwrap_err().to_string();
         assert!(
             err.contains("signature count") && err.contains("num_required_signatures"),
             "expected signature count mismatch error, got: {err}"
@@ -182,7 +186,7 @@ mod tests {
 
         // Tamper: remove signer_pubkeys so count no longer matches signatures
         tx.signer_pubkeys.clear();
-        let err = TxValidator::validate(&tx).unwrap_err().to_string();
+        let err = TxValidator::validate(&tx, 100).unwrap_err().to_string();
         assert!(
             err.contains("signer_pubkeys count"),
             "expected signer_pubkeys count mismatch error, got: {err}"
@@ -213,7 +217,7 @@ mod tests {
 
         // Tamper: replace signer_pubkeys with wrong key so verify_signatures fails
         tx.signer_pubkeys = vec![kp2.public_key().clone()];
-        let err = TxValidator::validate(&tx).unwrap_err().to_string();
+        let err = TxValidator::validate(&tx, 100).unwrap_err().to_string();
         assert!(
             err.contains("signature verification failed"),
             "expected signature verification error, got: {err}"
@@ -237,6 +241,14 @@ mod tests {
         };
         let mut tx = Transaction::new(msg);
         tx.sign(&[&kp]);
-        assert!(TxValidator::validate(&tx).is_err());
+        assert!(TxValidator::validate(&tx, 100).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_raw() {
+        let tx = valid_tx();
+        // Pass a raw_size exceeding the limit
+        let err = TxValidator::validate(&tx, MAX_TRANSACTION_SIZE as usize + 1).unwrap_err();
+        assert!(err.to_string().contains("too large"));
     }
 }

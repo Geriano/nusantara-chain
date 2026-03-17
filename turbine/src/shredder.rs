@@ -64,10 +64,10 @@ impl Shredder {
 
             let ec = ErasureCoder::from_fec_rate(num_data, FEC_RATE_PERCENT as u32);
 
-            // Serialize each data shred to bytes and pad to uniform length
+            // Use cached serialized bytes (avoids redundant re-serialization)
             let shard_bytes: Vec<Vec<u8>> = group
                 .iter()
-                .map(|s| borsh::to_vec(&s.shred).unwrap_or_default())
+                .map(|s| s.shred_bytes().to_vec())
                 .collect();
 
             let max_len = shard_bytes.iter().map(|b| b.len()).max().unwrap_or(0);

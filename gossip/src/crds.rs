@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use nusantara_crypto::Hash;
+use parking_lot::RwLock;
 
 use crate::contact_info::ContactInfo;
 use crate::crds_value::{CrdsData, CrdsValue, CrdsValueLabel};
@@ -15,6 +17,8 @@ pub struct CrdsEntry {
 pub struct CrdsTable {
     entries: DashMap<CrdsValueLabel, CrdsEntry>,
     cursor: AtomicU64,
+    /// Ordered index for efficient `values_since()`: insert_order -> label.
+    ordered_index: RwLock<BTreeMap<u64, CrdsValueLabel>>,
 }
 
 impl CrdsTable {
@@ -22,35 +26,57 @@ impl CrdsTable {
         Self {
             entries: DashMap::new(),
             cursor: AtomicU64::new(0),
+            ordered_index: RwLock::new(BTreeMap::new()),
         }
     }
 
     /// Insert a CRDS value. Returns Ok(Some(old)) if replaced, Ok(None) if new,
     /// or Err if the new value is stale (older wallclock).
+    ///
+    /// Uses DashMap::entry() API to eliminate TOCTOU race between check and insert.
     pub fn insert(&self, value: CrdsValue) -> Result<Option<CrdsValue>, GossipError> {
         let label = value.label();
         let wallclock = value.wallclock();
 
-        if let Some(existing) = self.entries.get(&label)
-            && existing.value.wallclock() >= wallclock
-        {
-            return Err(GossipError::StaleValue {
-                value_wallclock: wallclock,
-                existing_wallclock: existing.value.wallclock(),
-            });
+        let mut index = self.ordered_index.write();
+
+        match self.entries.entry(label.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
+                let existing = occupied.get();
+                if existing.value.wallclock() >= wallclock {
+                    return Err(GossipError::StaleValue {
+                        value_wallclock: wallclock,
+                        existing_wallclock: existing.value.wallclock(),
+                    });
+                }
+                let old_order = existing.insert_order;
+                let order = self.cursor.fetch_add(1, Ordering::Relaxed);
+
+                // Remove old index entry, add new one
+                index.remove(&old_order);
+                index.insert(order, label);
+
+                let old_value = occupied.get().value.clone();
+                occupied.insert(CrdsEntry {
+                    value,
+                    insert_order: order,
+                });
+
+                metrics::counter!("gossip_crds_inserts_total").increment(1);
+                Ok(Some(old_value))
+            }
+            dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                let order = self.cursor.fetch_add(1, Ordering::Relaxed);
+                index.insert(order, label);
+                vacant.insert(CrdsEntry {
+                    value,
+                    insert_order: order,
+                });
+
+                metrics::counter!("gossip_crds_inserts_total").increment(1);
+                Ok(None)
+            }
         }
-
-        let order = self.cursor.fetch_add(1, Ordering::Relaxed);
-        let old = self.entries.insert(
-            label,
-            CrdsEntry {
-                value,
-                insert_order: order,
-            },
-        );
-
-        metrics::counter!("gossip_crds_inserts_total").increment(1);
-        Ok(old.map(|e| e.value))
     }
 
     pub fn get(&self, label: &CrdsValueLabel) -> Option<CrdsValue> {
@@ -70,11 +96,13 @@ impl CrdsTable {
             .collect()
     }
 
+    /// Returns values inserted after `cursor`, using the ordered index for
+    /// O(log n + k) lookup instead of O(n) full scan.
     pub fn values_since(&self, cursor: u64) -> Vec<CrdsValue> {
-        self.entries
-            .iter()
-            .filter(|e| e.value().insert_order >= cursor)
-            .map(|e| e.value().value.clone())
+        let index = self.ordered_index.read();
+        index
+            .range(cursor..)
+            .filter_map(|(_, label)| self.entries.get(label).map(|e| e.value.clone()))
             .collect()
     }
 
@@ -83,16 +111,19 @@ impl CrdsTable {
     }
 
     pub fn purge_old(&self, min_wallclock: u64) -> usize {
-        let stale_labels: Vec<CrdsValueLabel> = self
+        let stale_labels: Vec<(CrdsValueLabel, u64)> = self
             .entries
             .iter()
             .filter(|e| e.value().value.wallclock() < min_wallclock)
-            .map(|e| e.key().clone())
+            .map(|e| (e.key().clone(), e.value().insert_order))
             .collect();
 
         let count = stale_labels.len();
-        for label in stale_labels {
-            self.entries.remove(&label);
+
+        let mut index = self.ordered_index.write();
+        for (label, order) in &stale_labels {
+            self.entries.remove(label);
+            index.remove(order);
         }
 
         if count > 0 {
@@ -223,5 +254,72 @@ mod tests {
         let purged = table.purge_old(1000);
         assert_eq!(purged, 1);
         assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn ordered_index_correct_after_updates() {
+        let table = CrdsTable::new();
+        let kp = Keypair::generate();
+
+        // Insert v1, update to v2
+        let v1 = make_contact_value(&kp, 1000);
+        table.insert(v1).unwrap();
+        let cursor = table.current_cursor();
+
+        let v2 = make_contact_value(&kp, 2000);
+        table.insert(v2.clone()).unwrap();
+
+        // values_since(cursor) should return the updated value
+        let vals = table.values_since(cursor);
+        assert_eq!(vals.len(), 1);
+        assert_eq!(vals[0], v2);
+    }
+
+    #[test]
+    fn ordered_index_correct_after_purge() {
+        let table = CrdsTable::new();
+        let kp1 = Keypair::generate();
+        let kp2 = Keypair::generate();
+
+        table.insert(make_contact_value(&kp1, 100)).unwrap();
+        table.insert(make_contact_value(&kp2, 2000)).unwrap();
+
+        table.purge_old(1000);
+
+        // Only kp2's value should remain
+        let vals = table.values_since(0);
+        assert_eq!(vals.len(), 1);
+    }
+
+    #[test]
+    fn concurrent_inserts_entry_api() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let table = Arc::new(CrdsTable::new());
+
+        // Pre-generate all values on the main thread (Keypair is not Clone)
+        let kp = Keypair::generate();
+        let identity = kp.address();
+        let values: Vec<CrdsValue> = (0..10)
+            .map(|i| make_contact_value(&kp, 1000 + i))
+            .collect();
+
+        let mut handles = Vec::new();
+        for v in values {
+            let t = Arc::clone(&table);
+            handles.push(thread::spawn(move || {
+                let _ = t.insert(v);
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Should have exactly 1 entry (the latest wallclock wins)
+        assert_eq!(table.len(), 1);
+        let value = table.get(&CrdsValueLabel::ContactInfo(identity)).unwrap();
+        // The wallclock should be the highest successfully inserted
+        assert!(value.wallclock() >= 1000);
     }
 }

@@ -1,17 +1,22 @@
 use std::sync::Arc;
 
+use nusantara_core::native_token::const_parse_u64;
 use nusantara_core::transaction::Transaction;
 use quinn::Endpoint;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Semaphore, mpsc, watch};
 use tracing::{debug, info, instrument, warn};
 
 use crate::protocol::TpuMessage;
 use crate::rate_limiter::RateLimiter;
 use crate::tx_validator::TxValidator;
 
+pub const MAX_CONCURRENT_CONNECTIONS: u64 =
+    const_parse_u64(env!("NUSA_TPU_MAX_CONCURRENT_CONNECTIONS"));
+
 pub struct TpuQuicServer {
     endpoint: Endpoint,
     rate_limiter: Arc<RateLimiter>,
+    connection_semaphore: Arc<Semaphore>,
 }
 
 impl TpuQuicServer {
@@ -19,6 +24,7 @@ impl TpuQuicServer {
         Self {
             endpoint,
             rate_limiter,
+            connection_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS as usize)),
         }
     }
 
@@ -30,7 +36,8 @@ impl TpuQuicServer {
         mut shutdown: watch::Receiver<bool>,
     ) {
         info!(
-            addr = %self.endpoint.local_addr().unwrap_or_else(|_| "unknown".parse().unwrap()),
+            addr = %self.endpoint.local_addr()
+                .map_or_else(|_| "unknown".to_string(), |a| a.to_string()),
             "TPU QUIC server started"
         );
 
@@ -46,17 +53,28 @@ impl TpuQuicServer {
                     let remote = incoming.remote_address();
                     let ip = remote.ip();
 
-                    // Check connection limit
-                    if let Err(e) = self.rate_limiter.check_connection_limit(ip) {
-                        debug!(%remote, error = %e, "connection rejected");
+                    // Atomic check-and-add connection (eliminates TOCTOU)
+                    if let Err(e) = self.rate_limiter.try_add_connection(ip) {
+                        debug!(%remote, error = %e, "connection rejected (per-IP limit)");
                         continue;
                     }
+
+                    // Bound concurrent connection tasks
+                    let permit = match self.connection_semaphore.clone().try_acquire_owned() {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            self.rate_limiter.remove_connection(ip);
+                            metrics::counter!("tpu_connections_rejected_total").increment(1);
+                            debug!(%remote, "connection rejected (semaphore full)");
+                            continue;
+                        }
+                    };
 
                     let rate_limiter = Arc::clone(&self.rate_limiter);
                     let tx_sender = tx_sender.clone();
 
                     tokio::spawn(async move {
-                        rate_limiter.add_connection(ip);
+                        let _permit = permit; // held until task completes
                         match incoming.await {
                             Ok(conn) => {
                                 handle_connection(conn, ip, &rate_limiter, &tx_sender).await;
@@ -97,6 +115,7 @@ async fn handle_connection(
 
         match stream.read_to_end(crate::tx_validator::MAX_TRANSACTION_SIZE as usize).await {
             Ok(data) => {
+                let raw_size = data.len();
                 match TpuMessage::deserialize_from_bytes(&data) {
                     Ok(msg) => {
                         for tx in msg.transactions() {
@@ -105,7 +124,7 @@ async fn handle_connection(
                                 return;
                             }
 
-                            if let Err(e) = TxValidator::validate(&tx) {
+                            if let Err(e) = TxValidator::validate(&tx, raw_size) {
                                 debug!(%ip, error = %e, "invalid transaction");
                                 metrics::counter!("tpu_invalid_transactions_total").increment(1);
                                 continue;
