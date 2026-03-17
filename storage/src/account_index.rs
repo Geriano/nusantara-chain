@@ -13,8 +13,9 @@ use crate::write_batch::StorageWriteBatch;
 
 impl Storage {
     /// Store an account at a specific slot.
-    /// Writes to both `accounts` CF (historical) and `account_index` CF (latest pointer),
-    /// then updates the owner and program indexes atomically.
+    /// Writes to `accounts` CF (historical), `account_index` CF (latest pointer),
+    /// and owner/program indexes in a single atomic WriteBatch.
+    #[tracing::instrument(skip(self, account), fields(address = %address, slot), level = "debug")]
     pub fn put_account(
         &self,
         address: &Hash,
@@ -30,15 +31,21 @@ impl Storage {
         let mut batch = StorageWriteBatch::new();
         batch.put(CF_ACCOUNTS, account_key(address, slot).to_vec(), value);
         batch.put(CF_ACCOUNT_INDEX, address.as_bytes().to_vec(), slot_key(slot).to_vec());
-        self.write(&batch)?;
 
-        // Maintain the owner and program indexes.
-        self.update_account_indexes(address, old_account.as_ref(), account)?;
+        // Merge owner/program index updates into same batch for atomicity
+        let index_batch = self.prepare_index_updates(address, old_account.as_ref(), account);
+        batch.merge(&index_batch);
+
+        self.write(&batch)?;
+        if !index_batch.is_empty() {
+            metrics::counter!("storage_owner_index_updates").increment(1);
+        }
 
         Ok(())
     }
 
     /// Get the latest version of an account.
+    #[tracing::instrument(skip(self), fields(address = %address), level = "debug")]
     pub fn get_account(&self, address: &Hash) -> Result<Option<Account>, StorageError> {
         let slot_bytes = match self.get_cf(CF_ACCOUNT_INDEX, address.as_bytes())? {
             Some(bytes) => bytes,
@@ -73,12 +80,14 @@ impl Storage {
 
     /// Rewind the account index so each address points to the latest version
     /// at or before `max_slot`. Returns the count of rewound entries.
+    /// All updates are collected into a single atomic WriteBatch.
     pub fn rewind_account_index_to_slot(&self, max_slot: u64) -> Result<u64, StorageError> {
         let cf_index = self
             .db
             .cf_handle(CF_ACCOUNT_INDEX)
             .ok_or(StorageError::CfNotFound(CF_ACCOUNT_INDEX))?;
 
+        let mut batch = StorageWriteBatch::new();
         let mut count = 0u64;
 
         // Iterate all account index entries
@@ -96,31 +105,30 @@ impl Storage {
             );
 
             if current_slot > max_slot {
-                // Need to find the latest version at or before max_slot
                 let address = Hash::new(
                     key[..64]
                         .try_into()
                         .map_err(|_| StorageError::Corruption("invalid address".into()))?,
                 );
 
-                // Search history for latest entry at or before max_slot
                 let history = self.get_account_history(&address, 512)?;
                 let best = history.iter().find(|(slot, _)| *slot <= max_slot);
 
                 match best {
                     Some((slot, _)) => {
-                        // Update index to point to this slot
-                        self.put_cf(CF_ACCOUNT_INDEX, address.as_bytes(), &slot.to_be_bytes())?;
+                        batch.put(CF_ACCOUNT_INDEX, address.as_bytes().to_vec(), slot.to_be_bytes().to_vec());
                     }
                     None => {
-                        // No version at or before max_slot — remove index entry
-                        self.delete_cf(CF_ACCOUNT_INDEX, address.as_bytes())?;
+                        batch.delete(CF_ACCOUNT_INDEX, address.as_bytes().to_vec());
                     }
                 }
                 count += 1;
             }
         }
 
+        if !batch.is_empty() {
+            self.write(&batch)?;
+        }
         Ok(count)
     }
 
@@ -151,10 +159,9 @@ impl Storage {
             .cf_handle(CF_ACCOUNT_INDEX)
             .ok_or(StorageError::CfNotFound(CF_ACCOUNT_INDEX))?;
 
-        // The minimum ancestor slot is the fork tree root. Slots at or below
-        // this are finalized history and must not be rewound.
         let root_slot = ancestor_slots.iter().copied().min().unwrap_or(0);
 
+        let mut batch = StorageWriteBatch::new();
         let mut count = 0u64;
 
         let iter = self.db.iterator_cf(cf_index, IteratorMode::Start);
@@ -170,12 +177,10 @@ impl Storage {
                     .map_err(|_| StorageError::Corruption("invalid slot bytes".into()))?,
             );
 
-            // Skip finalized history (at or below root) and ancestry members.
             if current_slot <= root_slot || ancestor_slots.contains(&current_slot) {
                 continue;
             }
 
-            // This slot is above the root but not in our ancestry — foreign fork.
             let address = Hash::new(
                 key[..64]
                     .try_into()
@@ -189,19 +194,18 @@ impl Storage {
 
             match best {
                 Some((slot, _)) => {
-                    self.put_cf(
-                        CF_ACCOUNT_INDEX,
-                        address.as_bytes(),
-                        &slot.to_be_bytes(),
-                    )?;
+                    batch.put(CF_ACCOUNT_INDEX, address.as_bytes().to_vec(), slot.to_be_bytes().to_vec());
                 }
                 None => {
-                    self.delete_cf(CF_ACCOUNT_INDEX, address.as_bytes())?;
+                    batch.delete(CF_ACCOUNT_INDEX, address.as_bytes().to_vec());
                 }
             }
             count += 1;
         }
 
+        if !batch.is_empty() {
+            self.write(&batch)?;
+        }
         Ok(count)
     }
 
@@ -218,46 +222,47 @@ impl Storage {
         parent_slot: u64,
         addresses: &[Hash],
     ) -> Result<u64, StorageError> {
+        let mut batch = StorageWriteBatch::new();
         let mut count = 0u64;
 
         for address in addresses {
-            // Delete the contaminated CF_ACCOUNTS entry at (address, slot)
-            let key = account_key(address, slot);
-            self.delete_cf(CF_ACCOUNTS, &key)?;
+            batch.delete(CF_ACCOUNTS, account_key(address, slot).to_vec());
 
-            // Restore account index to the latest version at or before parent_slot
             let history = self.get_account_history(address, 512)?;
             let best = history.iter().find(|(s, _)| *s <= parent_slot);
 
             match best {
                 Some((s, _)) => {
-                    self.put_cf(CF_ACCOUNT_INDEX, address.as_bytes(), &s.to_be_bytes())?;
+                    batch.put(CF_ACCOUNT_INDEX, address.as_bytes().to_vec(), s.to_be_bytes().to_vec());
                 }
                 None => {
-                    // No version at or before parent_slot — remove index entry
-                    self.delete_cf(CF_ACCOUNT_INDEX, address.as_bytes())?;
+                    batch.delete(CF_ACCOUNT_INDEX, address.as_bytes().to_vec());
                 }
             }
             count += 1;
         }
 
+        if !batch.is_empty() {
+            self.write(&batch)?;
+        }
         Ok(count)
     }
 
     /// Fork-aware cleanup after a failed replay attempt. Deletes the
     /// contaminated account data at `slot` and restores the index to the
     /// latest version that IS in the given ancestry set.
+    /// All updates are written in a single atomic WriteBatch.
     pub fn cleanup_failed_slot_for_ancestry(
         &self,
         slot: u64,
         addresses: &[Hash],
         ancestor_slots: &HashSet<u64>,
     ) -> Result<u64, StorageError> {
+        let mut batch = StorageWriteBatch::new();
         let mut count = 0u64;
 
         for address in addresses {
-            let key = account_key(address, slot);
-            self.delete_cf(CF_ACCOUNTS, &key)?;
+            batch.delete(CF_ACCOUNTS, account_key(address, slot).to_vec());
 
             let history = self.get_account_history(address, 512)?;
             let best = history
@@ -266,15 +271,18 @@ impl Storage {
 
             match best {
                 Some((s, _)) => {
-                    self.put_cf(CF_ACCOUNT_INDEX, address.as_bytes(), &s.to_be_bytes())?;
+                    batch.put(CF_ACCOUNT_INDEX, address.as_bytes().to_vec(), s.to_be_bytes().to_vec());
                 }
                 None => {
-                    self.delete_cf(CF_ACCOUNT_INDEX, address.as_bytes())?;
+                    batch.delete(CF_ACCOUNT_INDEX, address.as_bytes().to_vec());
                 }
             }
             count += 1;
         }
 
+        if !batch.is_empty() {
+            self.write(&batch)?;
+        }
         Ok(count)
     }
 

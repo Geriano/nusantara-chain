@@ -16,6 +16,6 @@ pub enum StorageError {
 
 impl From<std::io::Error> for StorageError {
     fn from(e: std::io::Error) -> Self {
-        StorageError::Serialization(e.to_string())
+        StorageError::Io(e.to_string())
     }
 }

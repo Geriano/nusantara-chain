@@ -14,6 +14,33 @@ use crate::write_batch::StorageWriteBatch;
 const DEFAULT_QUERY_LIMIT: usize = 1000;
 
 impl Storage {
+    /// Prepare owner/program index updates as a `StorageWriteBatch` without
+    /// writing. The caller can merge this into a larger batch for atomicity.
+    pub fn prepare_index_updates(
+        &self,
+        address: &Hash,
+        old_account: Option<&Account>,
+        new_account: &Account,
+    ) -> StorageWriteBatch {
+        let mut batch = StorageWriteBatch::new();
+
+        let new_owner = &new_account.owner;
+        let owner_changed = old_account.is_none_or(|old| old.owner != *new_owner);
+
+        if owner_changed {
+            if let Some(old) = old_account {
+                let old_key = owner_index_key(&old.owner, address);
+                batch.delete(CF_OWNER_INDEX, old_key.to_vec());
+                batch.delete(CF_PROGRAM_INDEX, old_key.to_vec());
+            }
+            let new_key = owner_index_key(new_owner, address);
+            batch.put(CF_OWNER_INDEX, new_key.to_vec(), Vec::new());
+            batch.put(CF_PROGRAM_INDEX, new_key.to_vec(), Vec::new());
+        }
+
+        batch
+    }
+
     /// Atomically update the owner and program indexes when an account is
     /// written. If the account previously existed with a different owner
     /// (or program), the stale index entries are removed before the new ones
@@ -26,43 +53,11 @@ impl Storage {
         old_account: Option<&Account>,
         new_account: &Account,
     ) -> Result<(), StorageError> {
-        let mut batch = StorageWriteBatch::new();
-
-        // --- owner index ---
-        let new_owner = &new_account.owner;
-        let owner_changed = old_account.is_none_or(|old| old.owner != *new_owner);
-
-        if owner_changed {
-            // Remove stale owner entry if one existed.
-            if let Some(old) = old_account {
-                let old_key = owner_index_key(&old.owner, address);
-                batch.delete(CF_OWNER_INDEX, old_key.to_vec());
-            }
-            // Insert new owner entry. Value is empty; the key alone encodes
-            // the relationship.
-            let new_key = owner_index_key(new_owner, address);
-            batch.put(CF_OWNER_INDEX, new_key.to_vec(), Vec::new());
-        }
-
-        // --- program index ---
-        // The "program" for an account is the same as its owner (the program
-        // that owns the account data). We maintain a separate CF so that the
-        // two indexes can be configured independently in the future and so
-        // the naming is explicit for API consumers.
-        if owner_changed {
-            if let Some(old) = old_account {
-                let old_key = owner_index_key(&old.owner, address);
-                batch.delete(CF_PROGRAM_INDEX, old_key.to_vec());
-            }
-            let new_key = owner_index_key(new_owner, address);
-            batch.put(CF_PROGRAM_INDEX, new_key.to_vec(), Vec::new());
-        }
-
+        let batch = self.prepare_index_updates(address, old_account, new_account);
         if !batch.is_empty() {
             self.write(&batch)?;
             metrics::counter!("storage_owner_index_updates").increment(1);
         }
-
         Ok(())
     }
 

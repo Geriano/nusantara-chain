@@ -49,6 +49,10 @@ pub struct RewardsCalculator;
 impl RewardsCalculator {
     /// Calculate the inflation rate for a given epoch in basis points.
     pub fn inflation_rate_bps(epoch: u64) -> u64 {
+        // Fast path: after ~100 epochs the rate converges to terminal
+        if epoch >= 100 {
+            return TERMINAL_INFLATION_RATE_BPS;
+        }
         let mut rate = INITIAL_INFLATION_RATE_BPS;
         for _ in 0..epoch {
             rate = rate.saturating_sub(rate * TAPER_RATE_BPS / 10_000);
@@ -196,8 +200,8 @@ impl RewardDistributionStatus {
     }
 
     pub fn record_partition_distributed(&mut self, partition_rewards: u64) {
-        self.distributed_partitions += 1;
-        self.distributed_rewards += partition_rewards;
+        self.distributed_partitions = self.distributed_partitions.saturating_add(1);
+        self.distributed_rewards = self.distributed_rewards.saturating_add(partition_rewards);
     }
 
     pub fn is_complete(&self) -> bool {

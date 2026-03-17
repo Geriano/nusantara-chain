@@ -94,6 +94,15 @@ impl ForkTree {
             return Err(ConsensusError::SlotAlreadyProcessed(slot));
         }
 
+        // Cap total nodes to prevent unbounded memory growth
+        let max_nodes = MAX_UNCONFIRMED_DEPTH as usize * 4;
+        if self.nodes.len() >= max_nodes {
+            return Err(ConsensusError::MaxDepthExceeded {
+                depth: self.nodes.len() as u64,
+                max: max_nodes as u64,
+            });
+        }
+
         let is_connected = if let Some(parent) = self.nodes.get_mut(&parent_slot) {
             parent.children.push(slot);
             parent.is_connected
@@ -149,29 +158,24 @@ impl ForkTree {
         best
     }
 
-    fn find_heaviest_from(&self, slot: u64) -> u64 {
-        let Some(node) = self.nodes.get(&slot) else {
-            return slot;
-        };
-
-        if node.children.is_empty() {
-            return slot;
-        }
-
-        // Find the child with the heaviest subtree.
-        // Tiebreaker: use block_hash (deterministic across all validators)
-        // instead of child_slot (which would make each validator prefer its own blocks).
-        let best_child = node
-            .children
-            .iter()
-            .filter_map(|&child_slot| {
-                self.nodes.get(&child_slot).map(|child| (child_slot, child))
-            })
-            .max_by_key(|(_child_slot, child)| (child.subtree_stake, child.block_hash));
-
-        match best_child {
-            Some((child_slot, _)) => self.find_heaviest_from(child_slot),
-            None => slot,
+    fn find_heaviest_from(&self, start: u64) -> u64 {
+        let mut current = start;
+        loop {
+            let Some(node) = self.nodes.get(&current) else {
+                return current;
+            };
+            if node.children.is_empty() {
+                return current;
+            }
+            match node
+                .children
+                .iter()
+                .filter_map(|&cs| self.nodes.get(&cs).map(|c| (cs, c)))
+                .max_by_key(|(_, c)| (c.subtree_stake, c.block_hash))
+            {
+                Some((best, _)) => current = best,
+                None => return current,
+            }
         }
     }
 
@@ -191,15 +195,15 @@ impl ForkTree {
         let mut reachable = std::collections::HashSet::new();
         self.collect_subtree(new_root, &mut reachable);
 
-        // Prune everything not in ancestry or reachable from new_root
-        let all_slots: Vec<u64> = self.nodes.keys().copied().collect();
+        // Prune everything not in ancestry or reachable from new_root (single-pass, no alloc)
         let mut pruned = Vec::new();
-        for slot in all_slots {
-            if !reachable.contains(&slot) && !ancestry_set.contains(&slot) {
-                self.nodes.remove(&slot);
+        self.nodes.retain(|&slot, _| {
+            let keep = reachable.contains(&slot) || ancestry_set.contains(&slot);
+            if !keep {
                 pruned.push(slot);
             }
-        }
+            keep
+        });
 
         // Remove ancestry nodes between old root and new root (exclusive)
         for &slot in &ancestry {
@@ -231,16 +235,18 @@ impl ForkTree {
         pruned
     }
 
-    fn collect_subtree(&self, slot: u64, reachable: &mut std::collections::HashSet<u64>) {
-        reachable.insert(slot);
-        if let Some(node) = self.nodes.get(&slot) {
-            for &child in &node.children {
-                self.collect_subtree(child, reachable);
+    fn collect_subtree(&self, root: u64, reachable: &mut std::collections::HashSet<u64>) {
+        let mut stack = vec![root];
+        while let Some(slot) = stack.pop() {
+            reachable.insert(slot);
+            if let Some(node) = self.nodes.get(&slot) {
+                stack.extend(&node.children);
             }
         }
     }
 
     /// Get ancestry chain from slot up to root.
+    #[instrument(skip(self), level = "debug")]
     pub fn get_ancestry(&self, slot: u64) -> Vec<u64> {
         let mut chain = Vec::new();
         let mut current = slot;
@@ -264,11 +270,13 @@ impl ForkTree {
     }
 
     /// Return the highest slot number in the fork tree.
+    #[instrument(skip(self), level = "debug")]
     pub fn latest_slot(&self) -> Option<u64> {
         self.nodes.keys().max().copied()
     }
 
     /// Try to reconnect orphan slots after their parent is added.
+    #[instrument(skip(self), level = "debug")]
     pub fn try_reconnect_orphans(&mut self) {
         // Iterate until no more progress — each pass may reconnect nodes whose
         // parents were reconnected in a previous pass.

@@ -1,6 +1,9 @@
 use tracing::info;
 
-use crate::cf::{CF_BLOCKS, CF_CODE_SHREDS, CF_DATA_SHREDS, CF_SLOT_META};
+use crate::cf::{
+    CF_BANK_HASHES, CF_BLOCKS, CF_CODE_SHREDS, CF_DATA_SHREDS, CF_ROOTS, CF_SLOT_HASHES,
+    CF_SLOT_META,
+};
 use crate::error::StorageError;
 use crate::keys::slot_key;
 use crate::storage::Storage;
@@ -15,6 +18,7 @@ impl Storage {
     /// Uses RocksDB's `delete_range_cf` for efficient bulk deletion -- this
     /// marks a tombstone range in the LSM tree rather than issuing individual
     /// deletes, making it O(1) in the number of keys removed.
+    #[tracing::instrument(skip(self), level = "info")]
     pub fn purge_slots_below(&self, min_slot: u64) -> Result<u64, StorageError> {
         if min_slot == 0 {
             return Ok(0);
@@ -27,7 +31,13 @@ impl Storage {
         let end = slot_key(min_slot);
 
         // Column families with slot-keyed entries (8-byte BE keys)
-        let slot_keyed_cfs: &[&str] = &[CF_BLOCKS, CF_SLOT_META];
+        let slot_keyed_cfs: &[&str] = &[
+            CF_BLOCKS,
+            CF_SLOT_META,
+            CF_BANK_HASHES,
+            CF_SLOT_HASHES,
+            CF_ROOTS,
+        ];
         for cf_name in slot_keyed_cfs {
             let cf = self
                 .db
@@ -72,6 +82,67 @@ impl Storage {
         info!(min_slot, "purged ledger slots below threshold");
 
         Ok(min_slot)
+    }
+
+    /// Purge transaction data (CF_TRANSACTIONS and CF_ADDRESS_SIGNATURES)
+    /// for slots below `min_slot`. Transaction data uses hash-based keys
+    /// so we can't use range deletes — this is a separate, opt-in method.
+    pub fn purge_transaction_data_below(&self, min_slot: u64) -> Result<u64, StorageError> {
+        use crate::cf::{CF_ADDRESS_SIGNATURES, CF_TRANSACTIONS};
+        use rocksdb::IteratorMode;
+
+        if min_slot == 0 {
+            return Ok(0);
+        }
+
+        let mut count = 0u64;
+
+        // Purge CF_TRANSACTIONS by scanning and checking slot in value
+        let cf_tx = self
+            .db
+            .cf_handle(CF_TRANSACTIONS)
+            .ok_or(StorageError::CfNotFound(CF_TRANSACTIONS))?;
+        let mut batch = crate::write_batch::StorageWriteBatch::new();
+        let iter = self.db.iterator_cf(cf_tx, IteratorMode::Start);
+        for item in iter {
+            let (key, value) = item.map_err(StorageError::RocksDb)?;
+            // TransactionStatusMeta starts with slot (u64 LE via borsh)
+            if value.len() >= 8 {
+                let slot = u64::from_le_bytes(
+                    value[..8].try_into().unwrap_or([0; 8]),
+                );
+                if slot < min_slot {
+                    batch.delete(CF_TRANSACTIONS, key.to_vec());
+                    count += 1;
+                }
+            }
+        }
+
+        // Purge CF_ADDRESS_SIGNATURES by slot embedded in key (bytes 64..72 BE)
+        let cf_addr = self
+            .db
+            .cf_handle(CF_ADDRESS_SIGNATURES)
+            .ok_or(StorageError::CfNotFound(CF_ADDRESS_SIGNATURES))?;
+        let iter = self.db.iterator_cf(cf_addr, IteratorMode::Start);
+        for item in iter {
+            let (key, _) = item.map_err(StorageError::RocksDb)?;
+            if key.len() >= 76 {
+                let slot = u64::from_be_bytes(
+                    key[64..72].try_into().unwrap_or([0; 8]),
+                );
+                if slot < min_slot {
+                    batch.delete(CF_ADDRESS_SIGNATURES, key.to_vec());
+                    count += 1;
+                }
+            }
+        }
+
+        if !batch.is_empty() {
+            self.write(&batch)?;
+        }
+
+        info!(min_slot, count, "purged transaction data below threshold");
+        Ok(count)
     }
 }
 

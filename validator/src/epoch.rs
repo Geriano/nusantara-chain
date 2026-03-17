@@ -111,7 +111,9 @@ impl ValidatorNode {
         let ms_per_epoch =
             self.epoch_schedule.slots_per_epoch * nusantara_core::DEFAULT_SLOT_DURATION_MS;
 
-        // Iterate accounts in this partition
+        // Fetch accounts from storage (blocking I/O, but rent collection is
+        // inherently sequential within the epoch boundary — keeping it
+        // synchronous here is simpler and the epoch boundary is infrequent).
         if let Ok(accounts) = self.storage.get_accounts_in_partition(partition, RENT_PARTITIONS) {
             for (address, mut account) in accounts {
                 // Integer rent calculation (deterministic across architectures)

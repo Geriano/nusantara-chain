@@ -15,8 +15,9 @@ impl ConsensusBank {
     /// Get validator effective stake.
     pub fn get_validator_stake(&self, validator: &Hash) -> u64 {
         self.epoch_stakes
+            .read()
             .get(validator)
-            .map(|v| *v)
+            .copied()
             .unwrap_or(0)
     }
 
@@ -43,8 +44,9 @@ impl ConsensusBank {
     /// Get the stake distribution: (validator_identity, effective_stake).
     pub fn get_stake_distribution(&self) -> Vec<(Hash, u64)> {
         self.epoch_stakes
+            .read()
             .iter()
-            .map(|entry| (*entry.key(), *entry.value()))
+            .map(|(&k, &v)| (k, v))
             .collect()
     }
 
@@ -66,11 +68,14 @@ impl ConsensusBank {
             }
 
             let effective_stake = if delegation.activation_epoch == epoch {
-                // Still warming up — integer BPS arithmetic (deterministic)
-                delegation.stake * delegation.warmup_cooldown_rate_bps / 10_000
+                // Still warming up — u128 intermediate to prevent overflow
+                (delegation.stake as u128 * delegation.warmup_cooldown_rate_bps as u128 / 10_000)
+                    as u64
             } else if delegation.deactivation_epoch == epoch {
-                // Cooling down — integer BPS arithmetic (deterministic)
-                delegation.stake * (10_000 - delegation.warmup_cooldown_rate_bps) / 10_000
+                // Cooling down — u128 intermediate to prevent overflow
+                (delegation.stake as u128
+                    * (10_000 - delegation.warmup_cooldown_rate_bps) as u128
+                    / 10_000) as u64
             } else {
                 delegation.stake
             };
@@ -81,8 +86,9 @@ impl ConsensusBank {
                 .get(&delegation.voter_pubkey)
                 .map(|vs| vs.node_pubkey)
                 .unwrap_or(delegation.voter_pubkey);
-            *new_stakes.entry(identity).or_default() += effective_stake;
-            total += effective_stake;
+            let entry = new_stakes.entry(identity).or_default();
+            *entry = entry.saturating_add(effective_stake);
+            total = total.saturating_add(effective_stake);
         }
 
         // Apply slash penalties before committing epoch stakes
@@ -95,21 +101,42 @@ impl ConsensusBank {
             }
         }
 
-        // Update epoch_stakes
-        self.epoch_stakes.clear();
-        for (validator, stake) in new_stakes {
-            self.epoch_stakes.insert(validator, stake);
-        }
+        // Atomic swap of epoch_stakes
+        let validator_count = new_stakes.len();
+        *self.epoch_stakes.write() = new_stakes;
         *self.total_active_stake.write() = total;
 
         metrics::gauge!("bank_total_active_stake").set(total as f64);
-        metrics::gauge!("bank_epoch_stake_validators").set(self.epoch_stakes.len() as f64);
+        metrics::gauge!("bank_epoch_stake_validators").set(validator_count as f64);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::test_utils::test_helpers::temp_bank;
+
+    #[test]
+    fn stake_warmup_large_values_no_overflow() {
+        let (bank, _storage, _dir) = temp_bank();
+
+        let voter = nusantara_crypto::hash(b"voter");
+        let acc = nusantara_crypto::hash(b"big_stake");
+        bank.set_stake_delegation(
+            acc,
+            nusantara_stake_program::Delegation {
+                voter_pubkey: voter,
+                stake: u64::MAX / 2,
+                activation_epoch: 1,
+                deactivation_epoch: u64::MAX,
+                warmup_cooldown_rate_bps: 10_000, // 100% warmup
+            },
+        );
+
+        // Epoch 1 = activation epoch → warmup path with large stake * 10_000 / 10_000
+        // Without u128 intermediate this would overflow
+        bank.recalculate_epoch_stakes(1);
+        assert_eq!(bank.get_validator_stake(&voter), u64::MAX / 2);
+    }
 
     #[test]
     fn stake_delegation_and_recalculate() {

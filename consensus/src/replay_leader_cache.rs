@@ -6,8 +6,11 @@ use crate::replay_stage::ReplayStage;
 
 impl ReplayStage {
     /// Cache a leader schedule for the given epoch.
+    /// Evicts schedules older than 2 epochs to bound memory usage.
     pub fn cache_leader_schedule(&mut self, epoch: u64, schedule: LeaderSchedule) {
         self.leader_schedule_cache.insert(epoch, schedule);
+        let min_epoch = epoch.saturating_sub(2);
+        self.leader_schedule_cache.retain(|&e, _| e >= min_epoch);
     }
 
     /// Get or compute leader schedule for the given epoch.

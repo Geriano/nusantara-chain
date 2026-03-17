@@ -1,4 +1,11 @@
-use rocksdb::{ColumnFamilyDescriptor, Options, SliceTransform};
+use nusantara_core::native_token::const_parse_u64;
+use rocksdb::{BlockBasedOptions, Cache, ColumnFamilyDescriptor, Options, SliceTransform};
+
+const WRITE_BUFFER_SIZE_MB: u64 = const_parse_u64(env!("NUSA_ROCKSDB_WRITE_BUFFER_SIZE_MB"));
+pub(crate) const MAX_BACKGROUND_JOBS: u64 =
+    const_parse_u64(env!("NUSA_ROCKSDB_MAX_BACKGROUND_JOBS"));
+const BLOOM_FILTER_BITS: u64 = const_parse_u64(env!("NUSA_ROCKSDB_BLOOM_FILTER_BITS"));
+const BLOCK_CACHE_SIZE_MB: u64 = const_parse_u64(env!("NUSA_ROCKSDB_BLOCK_CACHE_SIZE_MB"));
 
 pub const CF_DEFAULT: &str = "default";
 pub const CF_ACCOUNTS: &str = "accounts";
@@ -44,11 +51,41 @@ pub const ALL_CF_NAMES: &[&str] = &[
     CF_SLASHES,
 ];
 
+/// Column families that benefit from bloom filters (point-lookup heavy).
+const BLOOM_FILTER_CFS: &[&str] = &[
+    CF_ACCOUNT_INDEX,
+    CF_TRANSACTIONS,
+    CF_BANK_HASHES,
+    CF_ROOTS,
+    CF_SLOT_HASHES,
+    CF_SYSVARS,
+    CF_SNAPSHOTS,
+];
+
+/// Create a shared block cache for all CFs.
+pub fn shared_block_cache() -> Cache {
+    Cache::new_lru_cache(BLOCK_CACHE_SIZE_MB as usize * 1024 * 1024)
+}
+
 pub fn cf_descriptors() -> Vec<ColumnFamilyDescriptor> {
+    let cache = shared_block_cache();
+
     ALL_CF_NAMES
         .iter()
         .map(|name| {
             let mut opts = Options::default();
+            opts.set_write_buffer_size((WRITE_BUFFER_SIZE_MB as usize) * 1024 * 1024);
+
+            // Shared block cache
+            let mut block_opts = BlockBasedOptions::default();
+            block_opts.set_block_cache(&cache);
+
+            // Bloom filters for point-lookup CFs
+            if BLOOM_FILTER_CFS.contains(name) {
+                block_opts.set_bloom_filter(BLOOM_FILTER_BITS as f64, false);
+            }
+            opts.set_block_based_table_factory(&block_opts);
+
             match *name {
                 CF_ACCOUNTS => {
                     // Key: Hash(64) ++ slot(8) — prefix by address for iteration

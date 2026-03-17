@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -27,7 +28,7 @@ pub struct ConsensusBank {
     pub(crate) epoch_schedule: EpochSchedule,
     pub(crate) vote_accounts: DashMap<Hash, VoteState>,
     pub(crate) stake_delegations: DashMap<Hash, Delegation>,
-    pub(crate) epoch_stakes: DashMap<Hash, u64>,
+    pub(crate) epoch_stakes: RwLock<HashMap<Hash, u64>>,
     pub(crate) total_active_stake: RwLock<u64>,
     pub(crate) total_supply: RwLock<u64>,
     pub(crate) clock: RwLock<Clock>,
@@ -49,7 +50,7 @@ impl ConsensusBank {
             epoch_schedule,
             vote_accounts: DashMap::new(),
             stake_delegations: DashMap::new(),
-            epoch_stakes: DashMap::new(),
+            epoch_stakes: RwLock::new(HashMap::new()),
             total_active_stake: RwLock::new(0),
             total_supply: RwLock::new(0),
             clock: RwLock::new(Clock::default()),

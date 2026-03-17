@@ -40,10 +40,18 @@ impl ReplayStage {
             let poh_valid = if let Some(ref gpu) = self.gpu_verifier {
                 let entries: Vec<(Hash, u64, Hash)> = poh_entries
                     .windows(2)
-                    .map(|w| (w[0].hash, w[1].num_hashes - w[0].num_hashes, w[1].hash))
-                    .collect();
+                    .map(|w| {
+                        let delta = w[1].num_hashes.checked_sub(w[0].num_hashes)
+                            .ok_or(ConsensusError::PohVerificationFailed { index: 0 })?;
+                        Ok((w[0].hash, delta, w[1].hash))
+                    })
+                    .collect::<Result<Vec<_>, ConsensusError>>()?;
                 if entries.is_empty() {
                     true
+                } else if entries.iter().any(|(_, delta, _)| *delta > u32::MAX as u64) {
+                    // GPU shader uses u32 for num_hashes; fall back to CPU for large deltas
+                    tracing::warn!("PoH delta exceeds u32::MAX, falling back to CPU");
+                    verify_poh_entries(&poh_entries[0].hash, &poh_entries[1..])
                 } else {
                     match gpu.verify_batch(&entries) {
                         Ok(results) => results.iter().all(|&r| r),

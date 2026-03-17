@@ -35,6 +35,21 @@ impl StorageWriteBatch {
         });
     }
 
+    /// Merge all operations from another batch into this one.
+    pub fn merge(&mut self, other: &StorageWriteBatch) {
+        self.ops.extend(other.ops.iter().map(|op| match op {
+            BatchOp::Put { cf, key, value } => BatchOp::Put {
+                cf,
+                key: key.clone(),
+                value: value.clone(),
+            },
+            BatchOp::Delete { cf, key } => BatchOp::Delete {
+                cf,
+                key: key.clone(),
+            },
+        }));
+    }
+
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }

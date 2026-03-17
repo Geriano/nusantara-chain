@@ -1,6 +1,7 @@
 use borsh::BorshDeserialize;
 use nusantara_core::{Block, BlockHeader};
 use rocksdb::{Direction, IteratorMode};
+use tracing::instrument;
 
 use crate::cf::{CF_BLOCKS, CF_DEFAULT};
 use crate::error::StorageError;
@@ -9,6 +10,7 @@ use crate::storage::Storage;
 
 impl Storage {
     /// Store a block header.
+    #[instrument(skip(self, header), fields(slot = header.slot), level = "debug")]
     pub fn put_block_header(&self, header: &BlockHeader) -> Result<(), StorageError> {
         let key = slot_key(header.slot);
         let value =
@@ -30,34 +32,41 @@ impl Storage {
     }
 
     /// Check if a block header exists for a slot (without deserializing).
+    /// Uses `get_pinned_cf` to avoid copying the value — only checks existence.
+    #[instrument(skip(self), level = "debug")]
     pub fn has_block_header(&self, slot: u64) -> Result<bool, StorageError> {
         let key = slot_key(slot);
-        Ok(self.get_cf(CF_BLOCKS, &key)?.is_some())
+        let cf = self.cf_handle(CF_BLOCKS)?;
+        Ok(self.db.get_pinned_cf(cf, key)?.is_some())
     }
 
-    /// Delete a block (header from CF_BLOCKS + full block from CF_DEFAULT).
-    /// No-op if the block doesn't exist.
+    /// Delete a block (header from CF_BLOCKS + full block from CF_DEFAULT)
+    /// in a single atomic WriteBatch. No-op if the block doesn't exist.
     pub fn delete_block(&self, slot: u64) -> Result<(), StorageError> {
-        let header_key = slot_key(slot);
-        self.delete_cf(CF_BLOCKS, &header_key)?;
-        let block_key = [b"block_".as_slice(), &slot_key(slot)].concat();
-        self.delete_cf(CF_DEFAULT, &block_key)?;
-        Ok(())
+        let mut batch = crate::write_batch::StorageWriteBatch::new();
+        batch.delete(CF_BLOCKS, slot_key(slot).to_vec());
+        batch.delete(CF_DEFAULT, [b"block_".as_slice(), &slot_key(slot)].concat());
+        self.write(&batch)
     }
 
-    /// Store a full block (header + transactions) serialized with borsh.
+    /// Store a full block (header + transactions) in a single atomic WriteBatch.
     /// The header is also stored separately in CF_BLOCKS for fast header-only queries.
+    #[instrument(skip(self, block), fields(slot = block.header.slot), level = "debug")]
     pub fn put_block(&self, block: &Block) -> Result<(), StorageError> {
-        // Store header for fast lookup
-        self.put_block_header(&block.header)?;
-        // Store full block (header + transactions) in default CF with "block_" prefix
-        let key = [b"block_".as_slice(), &slot_key(block.header.slot)].concat();
-        let value =
+        let header_value =
+            borsh::to_vec(&block.header).map_err(|e| StorageError::Serialization(e.to_string()))?;
+        let block_key = [b"block_".as_slice(), &slot_key(block.header.slot)].concat();
+        let block_value =
             borsh::to_vec(block).map_err(|e| StorageError::Serialization(e.to_string()))?;
-        self.put_cf(CF_DEFAULT, &key, &value)
+
+        let mut batch = crate::write_batch::StorageWriteBatch::new();
+        batch.put(CF_BLOCKS, slot_key(block.header.slot).to_vec(), header_value);
+        batch.put(CF_DEFAULT, block_key, block_value);
+        self.write(&batch)
     }
 
     /// Get a full block (header + transactions) by slot.
+    #[instrument(skip(self), level = "debug")]
     pub fn get_block(&self, slot: u64) -> Result<Option<Block>, StorageError> {
         let key = [b"block_".as_slice(), &slot_key(slot)].concat();
         match self.get_cf(CF_DEFAULT, &key)? {

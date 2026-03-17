@@ -25,6 +25,7 @@ pub enum TransactionStatus {
 
 impl Storage {
     /// Store a transaction status.
+    #[tracing::instrument(skip(self, meta), fields(tx_hash = %tx_hash), level = "debug")]
     pub fn put_transaction_status(
         &self,
         tx_hash: &Hash,
@@ -64,6 +65,7 @@ impl Storage {
 
     /// Get transaction signatures for an address, ordered by (slot, tx_index) descending.
     /// Returns `(slot, tx_index, tx_hash)` tuples.
+    #[tracing::instrument(skip(self), fields(address = %address), level = "debug")]
     pub fn get_signatures_for_address(
         &self,
         address: &Hash,

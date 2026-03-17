@@ -44,7 +44,7 @@ pub struct Lockout {
 
 impl Lockout {
     pub fn lockout(&self) -> u64 {
-        2u64.pow(self.confirmation_count)
+        2u64.saturating_pow(self.confirmation_count.min(63))
     }
 
     pub fn is_locked_out_at_slot(&self, slot: u64) -> bool {
@@ -214,6 +214,30 @@ mod tests {
         assert_eq!(lockout.lockout(), 32);
         assert!(lockout.is_locked_out_at_slot(130));
         assert!(!lockout.is_locked_out_at_slot(133));
+    }
+
+    #[test]
+    fn lockout_overflow_guard() {
+        // confirmation_count = 64 would overflow 2^64; clamped to 63 → 2^63
+        let lockout_64 = Lockout {
+            slot: 0,
+            confirmation_count: 64,
+        };
+        assert_eq!(lockout_64.lockout(), 1u64 << 63);
+
+        let lockout_max = Lockout {
+            slot: 0,
+            confirmation_count: u32::MAX,
+        };
+        // Clamped to 63 → 2^63
+        assert_eq!(lockout_max.lockout(), 1u64 << 63);
+
+        // Normal case still works
+        let lockout_31 = Lockout {
+            slot: 0,
+            confirmation_count: 31,
+        };
+        assert_eq!(lockout_31.lockout(), 1u64 << 31);
     }
 
     #[test]

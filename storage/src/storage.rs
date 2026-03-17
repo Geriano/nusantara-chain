@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use rocksdb::{DB, Options};
 
@@ -6,8 +7,9 @@ use crate::cf;
 use crate::error::StorageError;
 use crate::write_batch::{BatchOp, StorageWriteBatch};
 
+#[derive(Clone)]
 pub struct Storage {
-    pub(crate) db: DB,
+    pub(crate) db: Arc<DB>,
 }
 
 impl Storage {
@@ -17,9 +19,17 @@ impl Storage {
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
 
+        // Global RocksDB tuning
+        let parallelism = std::thread::available_parallelism()
+            .map(|p| p.get() as i32)
+            .unwrap_or(4);
+        db_opts.increase_parallelism(parallelism);
+        db_opts.set_max_background_jobs(cf::MAX_BACKGROUND_JOBS as i32);
+        db_opts.set_bytes_per_sync(1_048_576);
+
         let cf_descs = cf::cf_descriptors();
         let db = DB::open_cf_descriptors(&db_opts, path, cf_descs)?;
-        Ok(Self { db })
+        Ok(Self { db: Arc::new(db) })
     }
 
     /// Destroy the database at the given path.
@@ -29,6 +39,7 @@ impl Storage {
     }
 
     /// Atomically write a batch of operations.
+    #[tracing::instrument(skip(self, batch), level = "debug")]
     pub fn write(&self, batch: &StorageWriteBatch) -> Result<(), StorageError> {
         let mut wb = rocksdb::WriteBatch::default();
         for op in &batch.ops {
@@ -79,7 +90,7 @@ impl Storage {
         Ok(())
     }
 
-    fn cf_handle(&self, cf_name: &'static str) -> Result<&rocksdb::ColumnFamily, StorageError> {
+    pub(crate) fn cf_handle(&self, cf_name: &'static str) -> Result<&rocksdb::ColumnFamily, StorageError> {
         self.db
             .cf_handle(cf_name)
             .ok_or(StorageError::CfNotFound(cf_name))

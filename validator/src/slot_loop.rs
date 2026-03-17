@@ -69,16 +69,19 @@ impl ValidatorNode {
                         metrics::gauge!("nusantara_gossip_peers").set(peer_count as f64);
                     }
 
-                    // Periodic ledger pruning
+                    // Periodic ledger pruning (offloaded to blocking thread)
                     if cli.max_ledger_slots > 0
                         && self.current_slot.is_multiple_of(LEDGER_PRUNE_INTERVAL)
                     {
                         let min_slot =
                             self.current_slot.saturating_sub(cli.max_ledger_slots);
-                        if min_slot > 0
-                            && let Err(e) = self.storage.purge_slots_below(min_slot)
-                        {
-                            warn!(error = %e, min_slot, "ledger pruning failed");
+                        if min_slot > 0 {
+                            let storage = self.storage.clone();
+                            tokio::task::spawn_blocking(move || {
+                                if let Err(e) = storage.purge_slots_below(min_slot) {
+                                    tracing::warn!(error = %e, min_slot, "ledger pruning failed");
+                                }
+                            });
                         }
                     }
 

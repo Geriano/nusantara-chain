@@ -42,6 +42,7 @@ impl CommitmentTracker {
     }
 
     /// Begin tracking a slot at Processed level.
+    #[instrument(skip(self), level = "debug")]
     pub fn track_slot(&mut self, slot: u64, block_hash: Hash) {
         self.slots.entry(slot).or_insert(SlotCommitment {
             slot,
@@ -114,6 +115,7 @@ impl CommitmentTracker {
     }
 
     /// Prune entries below the given slot.
+    #[instrument(skip(self), level = "debug")]
     pub fn prune_below(&mut self, slot: u64) {
         self.slots.retain(|&s, _| s >= slot);
     }
