@@ -98,7 +98,11 @@ impl TurbineTree {
     }
 }
 
+/// Fixed-point scale factor for u128 integer arithmetic (10^18).
+const SCALE: u128 = 1_000_000_000_000_000_000;
+
 /// Internal stake-weighted shuffle for turbine tree ordering.
+/// Uses u128 fixed-point arithmetic for cross-platform determinism.
 fn weighted_shuffle_turbine(nodes: &[(Hash, u64)], seed: &Hash) -> Vec<Hash> {
     if nodes.is_empty() {
         return Vec::new();
@@ -109,7 +113,7 @@ fn weighted_shuffle_turbine(nodes: &[(Hash, u64)], seed: &Hash) -> Vec<Hash> {
         return nodes.iter().map(|(h, _)| *h).collect();
     }
 
-    let mut weighted: Vec<(usize, f64)> = nodes
+    let mut weighted: Vec<(usize, u128)> = nodes
         .iter()
         .enumerate()
         .map(|(i, (identity, stake))| {
@@ -118,13 +122,16 @@ fn weighted_shuffle_turbine(nodes: &[(Hash, u64)], seed: &Hash) -> Vec<Hash> {
             let rand_val = u64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3],
                 bytes[4], bytes[5], bytes[6], bytes[7],
-            ]) as f64 / u64::MAX as f64;
-            let weight = (*stake as f64 / total_stake as f64) + rand_val * 0.01;
+            ]);
+            let stake_component = (*stake as u128) * SCALE / (total_stake as u128);
+            let rand_component =
+                (rand_val as u128) * (SCALE / 100) / (u64::MAX as u128);
+            let weight = stake_component + rand_component;
             (i, weight)
         })
         .collect();
 
-    weighted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    weighted.sort_by(|a, b| b.1.cmp(&a.1));
     weighted.into_iter().map(|(i, _)| nodes[i].0).collect()
 }
 

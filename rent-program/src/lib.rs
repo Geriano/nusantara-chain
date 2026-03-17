@@ -33,6 +33,33 @@ impl Rent {
         let rent = (bytes as f64 * self.lamports_per_byte_year as f64 * years_elapsed) as u64;
         RentDue::Paying(rent)
     }
+
+    /// Integer-only rent calculation for consensus-critical paths.
+    ///
+    /// Uses u128 intermediate arithmetic to avoid floating-point non-determinism
+    /// across CPU architectures. `ms_per_epoch` is the epoch duration in
+    /// milliseconds, `ms_per_year` is the year duration in milliseconds.
+    ///
+    /// rent_due = bytes * lamports_per_byte_year * ms_per_epoch / ms_per_year
+    pub fn due_epoch(
+        &self,
+        lamports: u64,
+        data_len: usize,
+        ms_per_epoch: u64,
+        ms_per_year: u64,
+    ) -> RentDue {
+        let min = self.minimum_balance(data_len);
+        if lamports >= min {
+            return RentDue::Exempt;
+        }
+
+        let bytes = 128u128 + data_len as u128;
+        let rent = bytes
+            .saturating_mul(self.lamports_per_byte_year as u128)
+            .saturating_mul(ms_per_epoch as u128)
+            / ms_per_year as u128;
+        RentDue::Paying(rent as u64)
+    }
 }
 
 impl Default for Rent {
@@ -100,6 +127,47 @@ mod tests {
         let rent = Rent::default();
         let due = rent.due(0, 100, 1.0);
         assert!(matches!(due, RentDue::Paying(_)));
+    }
+
+    #[test]
+    fn due_epoch_exempt() {
+        let rent = Rent::default();
+        let min = rent.minimum_balance(100);
+        // 432_000 slots * 900ms = 388_800_000 ms per epoch
+        let ms_per_epoch = 432_000u64 * 900;
+        let ms_per_year = 31_536_000_000u64;
+        assert_eq!(
+            rent.due_epoch(min, 100, ms_per_epoch, ms_per_year),
+            RentDue::Exempt
+        );
+    }
+
+    #[test]
+    fn due_epoch_paying() {
+        let rent = Rent::default();
+        let ms_per_epoch = 432_000u64 * 900;
+        let ms_per_year = 31_536_000_000u64;
+        let due = rent.due_epoch(0, 100, ms_per_epoch, ms_per_year);
+        assert!(matches!(due, RentDue::Paying(amount) if amount > 0));
+    }
+
+    #[test]
+    fn due_epoch_matches_due_approximately() {
+        let rent = Rent::default();
+        let ms_per_epoch = 432_000u64 * 900;
+        let ms_per_year = 31_536_000_000u64;
+        let years_per_epoch = ms_per_epoch as f64 / ms_per_year as f64;
+
+        // Compare integer vs float for 100-byte data
+        let float_due = rent.due(0, 100, years_per_epoch);
+        let int_due = rent.due_epoch(0, 100, ms_per_epoch, ms_per_year);
+
+        if let (RentDue::Paying(f), RentDue::Paying(i)) = (float_due, int_due) {
+            // Allow 1 lamport rounding difference
+            assert!(f.abs_diff(i) <= 1, "float={f} int={i}");
+        } else {
+            panic!("both should be Paying");
+        }
     }
 
     #[test]

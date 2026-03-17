@@ -1,7 +1,9 @@
 use nusantara_crypto::Hash;
+use nusantara_rent_program::RentDue;
 use tracing::{info, warn};
 
-use crate::constants::RENT_PARTITIONS;
+use crate::constants::{MS_PER_YEAR, RENT_PARTITIONS};
+use crate::helpers;
 use crate::node::ValidatorNode;
 
 impl ValidatorNode {
@@ -69,38 +71,35 @@ impl ValidatorNode {
             .map(|(_, h)| *h)
             .unwrap_or(Hash::zero());
 
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time went backwards")
-            .as_secs() as i64;
+        let timestamp = helpers::unix_timestamp_secs();
+        let storage = std::sync::Arc::clone(&self.storage);
+        let current_slot = self.current_slot;
+        let snapshot_dir = self.snapshot_dir.clone();
 
-        match snapshot_archive::create_snapshot(
-            &self.storage,
-            self.current_slot,
-            bank_hash,
-            timestamp,
-        ) {
-            Ok(archive) => {
-                // Save to ledger/snapshots/ directory
-                let snapshot_dir = std::path::Path::new("ledger").join("snapshots");
-                if std::fs::create_dir_all(&snapshot_dir).is_ok() {
-                    let path = snapshot_dir.join(format!("snapshot-{}.bin", self.current_slot));
-                    if let Err(e) = snapshot_archive::save_to_file(&archive, &path) {
-                        warn!(error = %e, "failed to save snapshot file");
-                    } else {
-                        info!(
-                            slot = self.current_slot,
-                            accounts = archive.manifest.account_count,
-                            path = %path.display(),
-                            "snapshot created"
-                        );
+        // Snapshot creation reads from RocksDB (blocking I/O) — offload to
+        // a blocking thread to avoid stalling the async slot loop.
+        tokio::task::spawn_blocking(move || {
+            match snapshot_archive::create_snapshot(&storage, current_slot, bank_hash, timestamp) {
+                Ok(archive) => {
+                    if std::fs::create_dir_all(&snapshot_dir).is_ok() {
+                        let path = snapshot_dir.join(format!("snapshot-{current_slot}.bin"));
+                        if let Err(e) = snapshot_archive::save_to_file(&archive, &path) {
+                            tracing::warn!(error = %e, "failed to save snapshot file");
+                        } else {
+                            tracing::info!(
+                                slot = current_slot,
+                                accounts = archive.manifest.account_count,
+                                path = %path.display(),
+                                "snapshot created"
+                            );
+                        }
                     }
                 }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to create snapshot");
+                }
             }
-            Err(e) => {
-                warn!(error = %e, "failed to create snapshot");
-            }
-        }
+        });
     }
 
     fn collect_rent(&self, epoch: u64) {
@@ -109,20 +108,22 @@ impl ValidatorNode {
         let mut accounts_closed = 0u64;
 
         let rent = &self.rent;
-        // Approximate: epochs per year at 900ms slots, 432000 slots/epoch
-        let epochs_per_year: f64 = 365.0 * 24.0 * 3600.0 * 1000.0 / (432_000.0 * 900.0);
+        let ms_per_epoch =
+            self.epoch_schedule.slots_per_epoch * nusantara_core::DEFAULT_SLOT_DURATION_MS;
 
         // Iterate accounts in this partition
         if let Ok(accounts) = self.storage.get_accounts_in_partition(partition, RENT_PARTITIONS) {
             for (address, mut account) in accounts {
-                // Skip rent-exempt accounts
-                if account.lamports >= rent.minimum_balance(account.data.len()) {
-                    continue;
-                }
-
-                // Calculate rent due
-                let rent_due = (rent.lamports_per_byte_year as f64 * account.data.len() as f64
-                    / epochs_per_year) as u64;
+                // Integer rent calculation (deterministic across architectures)
+                let rent_due = match rent.due_epoch(
+                    account.lamports,
+                    account.data.len(),
+                    ms_per_epoch,
+                    MS_PER_YEAR,
+                ) {
+                    RentDue::Exempt => continue,
+                    RentDue::Paying(amount) => amount,
+                };
 
                 if rent_due == 0 {
                     continue;
@@ -236,16 +237,14 @@ impl ValidatorNode {
 
     fn process_stake_transitions(&self, epoch: u64) {
         let delegations = self.bank.get_all_delegations();
-        let warmup_cooldown_rate =
-            nusantara_stake_program::DEFAULT_WARMUP_COOLDOWN_RATE_BPS as f64 / 10_000.0;
+        let rate_bps = nusantara_stake_program::DEFAULT_WARMUP_COOLDOWN_RATE_BPS;
 
         for (stake_account, delegation) in &delegations {
-            // Remove fully cooled-down delegations
+            // Remove fully cooled-down delegations (integer BPS arithmetic)
             if delegation.deactivation_epoch != u64::MAX {
                 let epochs_deactivating = epoch.saturating_sub(delegation.deactivation_epoch);
-                let effective_rate =
-                    (1.0 - epochs_deactivating as f64 * warmup_cooldown_rate).max(0.0);
-                if effective_rate == 0.0 {
+                let cooldown_bps = epochs_deactivating.saturating_mul(rate_bps);
+                if cooldown_bps >= 10_000 {
                     // Fully cooled down — remove delegation from bank
                     // The stake has been returned to the stake account via withdraw
                     self.bank.remove_stake_delegation(stake_account);

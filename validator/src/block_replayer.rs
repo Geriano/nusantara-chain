@@ -5,12 +5,14 @@ use nusantara_consensus::bank::ConsensusBank;
 use nusantara_consensus::replay_stage::{ReplayResult, ReplayStage};
 use nusantara_core::block::Block;
 use nusantara_core::{EpochSchedule, FeeCalculator};
-use nusantara_crypto::{Hash, MerkleTree, hashv};
+use nusantara_crypto::{Hash, hashv};
 use nusantara_rent_program::Rent;
-use nusantara_runtime::{ProgramCache, SysvarCache, execute_slot_parallel};
+use nusantara_runtime::{ProgramCache, execute_slot_parallel};
 use nusantara_storage::Storage;
-use nusantara_sysvar_program::{RecentBlockhashes, SlotHashes};
+use nusantara_sysvar_program::SlotHashes;
 use tracing::instrument;
+
+use crate::helpers;
 
 use crate::error::ValidatorError;
 
@@ -85,20 +87,7 @@ pub fn replay_block_full(
     bank.advance_slot(slot, block.header.timestamp);
 
     // 5. Build SysvarCache from reconstructed bank state
-    let clock = bank.clock();
-    let slot_hashes = bank.slot_hashes();
-    let stake_history = bank.stake_history();
-    let recent_blockhashes = RecentBlockhashes::new(
-        slot_hashes.0.iter().take(300).map(|(_, h)| *h).collect(),
-    );
-    let sysvars = SysvarCache::new(
-        clock,
-        rent.clone(),
-        epoch_schedule.clone(),
-        slot_hashes,
-        stake_history,
-        recent_blockhashes,
-    );
+    let sysvars = helpers::build_sysvar_cache(bank, rent, epoch_schedule);
 
     // 6. Fork-aware rewind of account index before execution.
     //
@@ -161,12 +150,7 @@ pub fn replay_block_full(
     }
 
     // 10. Verify merkle_root
-    let expected_merkle = if block.transactions.is_empty() {
-        Hash::zero()
-    } else {
-        let tx_hashes: Vec<Hash> = block.transactions.iter().map(|tx| tx.hash()).collect();
-        MerkleTree::new(&tx_hashes).root()
-    };
+    let expected_merkle = helpers::compute_merkle_root(&block.transactions);
     if expected_merkle != block.header.merkle_root {
         cleanup_failed_replay(storage, slot, &modified_addresses, &ancestor_set);
         return Err(ValidatorError::MerkleRootMismatch { slot });

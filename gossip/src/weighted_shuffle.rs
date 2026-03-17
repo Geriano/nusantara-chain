@@ -1,7 +1,14 @@
 use nusantara_crypto::{Hash, hashv};
 
-/// Stake-weighted deterministic shuffle.
+/// Fixed-point scale factor for u128 integer arithmetic (10^18).
+/// Provides enough precision to replace f64 while remaining deterministic.
+const SCALE: u128 = 1_000_000_000_000_000_000;
+
+/// Stake-weighted deterministic shuffle using u128 fixed-point arithmetic.
 /// Returns indices sorted by stake-weighted priority derived from the seed.
+///
+/// Uses integer math exclusively to ensure identical ordering across all
+/// CPU architectures (no floating-point non-determinism).
 pub fn weighted_shuffle(stakes: &[(Hash, u64)], seed: &Hash) -> Vec<usize> {
     if stakes.is_empty() {
         return Vec::new();
@@ -13,8 +20,8 @@ pub fn weighted_shuffle(stakes: &[(Hash, u64)], seed: &Hash) -> Vec<usize> {
         return (0..stakes.len()).collect();
     }
 
-    // Generate a deterministic weight for each node
-    let mut weighted: Vec<(usize, f64)> = stakes
+    // Generate a deterministic weight for each node using u128 fixed-point
+    let mut weighted: Vec<(usize, u128)> = stakes
         .iter()
         .enumerate()
         .map(|(i, (identity, stake))| {
@@ -22,16 +29,20 @@ pub fn weighted_shuffle(stakes: &[(Hash, u64)], seed: &Hash) -> Vec<usize> {
             let bytes = h.as_bytes();
             let rand_val = u64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]) as f64
-                / u64::MAX as f64;
+            ]);
 
-            // Higher stake -> higher priority (stake-weighted random)
-            let weight = (*stake as f64 / total_stake as f64) + rand_val * 0.01;
+            // stake_component = stake * SCALE / total_stake
+            let stake_component = (*stake as u128) * SCALE / (total_stake as u128);
+            // rand_component = rand_val * (SCALE / 100) / u64::MAX
+            let rand_component =
+                (rand_val as u128) * (SCALE / 100) / (u64::MAX as u128);
+
+            let weight = stake_component + rand_component;
             (i, weight)
         })
         .collect();
 
-    weighted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    weighted.sort_by(|a, b| b.1.cmp(&a.1));
     weighted.into_iter().map(|(i, _)| i).collect()
 }
 

@@ -1,15 +1,16 @@
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use nusantara_consensus::bank::ConsensusBank;
 use nusantara_consensus::poh::PohRecorder;
 use nusantara_core::{Block, BlockHeader, EpochSchedule, FeeCalculator, Transaction};
-use nusantara_crypto::{Hash, MerkleTree, hashv};
+use nusantara_crypto::{Hash, hashv};
 use nusantara_rent_program::Rent;
-use nusantara_runtime::{ProgramCache, SysvarCache, execute_slot_parallel};
+use nusantara_runtime::{ProgramCache, execute_slot_parallel};
 use nusantara_storage::{SlotMeta, Storage};
-use nusantara_sysvar_program::RecentBlockhashes;
 use tracing::{info, instrument};
+
+use crate::helpers;
 
 use crate::error::ValidatorError;
 
@@ -65,29 +66,13 @@ impl BlockProducer {
     ) -> Result<Block, ValidatorError> {
         let start = Instant::now();
 
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time went backwards")
-            .as_secs() as i64;
+        let timestamp = helpers::unix_timestamp_secs();
 
         // 1. Advance bank to current slot (updates Clock sysvar)
         self.bank.advance_slot(slot, timestamp);
 
         // 2. Build SysvarCache with current bank state
-        let clock = self.bank.clock();
-        let slot_hashes = self.bank.slot_hashes();
-        let stake_history = self.bank.stake_history();
-        let recent_blockhashes = RecentBlockhashes::new(
-            slot_hashes.0.iter().take(300).map(|(_, h)| *h).collect(),
-        );
-        let sysvars = SysvarCache::new(
-            clock,
-            self.rent.clone(),
-            self.epoch_schedule.clone(),
-            slot_hashes,
-            stake_history,
-            recent_blockhashes,
-        );
+        let sysvars = helpers::build_sysvar_cache(&self.bank, &self.rent, &self.epoch_schedule);
 
         // 3. Execute slot via parallel runtime (Sealevel-style scheduling)
         let exec_result = execute_slot_parallel(
@@ -113,12 +98,7 @@ impl BlockProducer {
         let poh_hash = self.poh.current_hash();
 
         // 7. Compute merkle root of transaction hashes
-        let merkle_root = if transactions.is_empty() {
-            Hash::zero()
-        } else {
-            let tx_hashes: Vec<Hash> = transactions.iter().map(|tx| tx.hash()).collect();
-            MerkleTree::new(&tx_hashes).root()
-        };
+        let merkle_root = helpers::compute_merkle_root(&transactions);
 
         // 8. Compute block hash
         let block_hash = hashv(&[

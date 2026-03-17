@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -88,6 +89,9 @@ pub struct ValidatorNode {
 
     // Shared shred collector for requesting repair
     pub(crate) shred_collector: Arc<ShredCollector>,
+
+    // Snapshot output directory
+    pub(crate) snapshot_dir: PathBuf,
 
     // Track fork switch targets that have failed to prevent infinite retry.
     // Cleared when root advances (fork landscape changes).

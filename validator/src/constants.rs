@@ -30,5 +30,17 @@ pub(crate) const LEDGER_PRUNE_INTERVAL: u64 = 100;
 /// Report gossip peer count every N slots.
 pub(crate) const GOSSIP_REPORT_INTERVAL: u64 = 10;
 
+/// Number of recent blockhashes to keep in the SysvarCache.
+pub(crate) const RECENT_BLOCKHASHES_COUNT: usize = 300;
+
+/// Timeout (ms) for ClusterInfo startup before considering peers lost.
+pub(crate) const CLUSTER_INFO_TIMEOUT_MS: u64 = 60_000;
+
+/// Maximum entries in the WASM ProgramCache.
+pub(crate) const PROGRAM_CACHE_SIZE: usize = 256;
+
+/// Milliseconds in a calendar year (365 days).
+pub(crate) const MS_PER_YEAR: u64 = 31_536_000_000;
+
 /// Shared leader schedule cache type.
 pub(crate) type SharedLeaderCache = Arc<parking_lot::RwLock<HashMap<u64, LeaderSchedule>>>;

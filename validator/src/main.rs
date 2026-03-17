@@ -6,6 +6,7 @@ mod constants;
 mod epoch;
 mod error;
 mod fork_manager;
+mod helpers;
 mod identity;
 mod node;
 mod replay;

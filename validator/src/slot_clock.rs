@@ -23,8 +23,10 @@ impl SlotClock {
     }
 
     pub async fn wait_for_slot(&self, target_slot: u64) {
-        let target_time_ms =
-            self.genesis_creation_time_ms + (target_slot * self.slot_duration_ms) as i64;
+        let Some(offset) = target_slot.checked_mul(self.slot_duration_ms) else {
+            return; // overflow — slot too large, skip waiting
+        };
+        let target_time_ms = self.genesis_creation_time_ms.saturating_add(offset as i64);
         let now_ms = Self::now_ms();
         let wait_ms = target_time_ms - now_ms;
         if wait_ms > 0 {
@@ -41,9 +43,11 @@ impl SlotClock {
     /// Returns Duration::ZERO if deadline has already passed.
     #[allow(dead_code)]
     pub fn slot_deadline(&self, slot: u64, timeout_ms: u64) -> Duration {
-        let slot_start_ms =
-            self.genesis_creation_time_ms + (slot * self.slot_duration_ms) as i64;
-        let deadline_ms = slot_start_ms + timeout_ms as i64;
+        let Some(offset) = slot.checked_mul(self.slot_duration_ms) else {
+            return Duration::ZERO;
+        };
+        let slot_start_ms = self.genesis_creation_time_ms.saturating_add(offset as i64);
+        let deadline_ms = slot_start_ms.saturating_add(timeout_ms as i64);
         let now_ms = Self::now_ms();
         let wait = deadline_ms - now_ms;
         if wait > 0 {

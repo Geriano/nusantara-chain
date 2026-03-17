@@ -1,10 +1,9 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use nusantara_crypto::Hash;
 use nusantara_vote_program::Vote;
 use tracing::{info, warn};
 
 use crate::constants::{SLASH_PURGE_DEPTH, SLASH_PURGE_INTERVAL};
+use crate::helpers;
 use crate::node::ValidatorNode;
 use crate::vote_tx::build_vote_transaction;
 
@@ -34,10 +33,7 @@ impl ValidatorNode {
             .map(|(_, h)| *h)
             .unwrap_or(Hash::zero());
 
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time went backwards")
-            .as_secs() as i64;
+        let timestamp = helpers::unix_timestamp_secs();
 
         let vote = Vote {
             slots: vote_slots,

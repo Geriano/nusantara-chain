@@ -264,16 +264,20 @@ impl ValidatorNode {
 
         // 5. Publish pubsub events for WebSocket subscribers
         let root = self.storage.get_latest_root().unwrap_or(None).unwrap_or(0);
-        let _ = self.pubsub_tx.send(PubsubEvent::SlotUpdate {
+        if let Err(e) = self.pubsub_tx.send(PubsubEvent::SlotUpdate {
             slot: self.current_slot,
             parent: block.header.parent_slot,
             root,
-        });
-        let _ = self.pubsub_tx.send(PubsubEvent::BlockNotification {
+        }) {
+            tracing::debug!(error = %e, "pubsub SlotUpdate send failed (no subscribers)");
+        }
+        if let Err(e) = self.pubsub_tx.send(PubsubEvent::BlockNotification {
             slot: self.current_slot,
             block_hash: block.header.block_hash.to_base64(),
             tx_count: block.header.transaction_count,
-        });
+        }) {
+            tracing::debug!(error = %e, "pubsub BlockNotification send failed (no subscribers)");
+        }
 
         metrics::counter!("nusantara_leader_slots").increment(1);
         info!(

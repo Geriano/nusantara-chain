@@ -66,13 +66,11 @@ impl ConsensusBank {
             }
 
             let effective_stake = if delegation.activation_epoch == epoch {
-                // Still warming up - apply warmup rate
-                let warmup_rate = delegation.warmup_cooldown_rate_bps as f64 / 10_000.0;
-                (delegation.stake as f64 * warmup_rate) as u64
+                // Still warming up — integer BPS arithmetic (deterministic)
+                delegation.stake * delegation.warmup_cooldown_rate_bps / 10_000
             } else if delegation.deactivation_epoch == epoch {
-                // Cooling down
-                let cooldown_rate = delegation.warmup_cooldown_rate_bps as f64 / 10_000.0;
-                (delegation.stake as f64 * (1.0 - cooldown_rate)) as u64
+                // Cooling down — integer BPS arithmetic (deterministic)
+                delegation.stake * (10_000 - delegation.warmup_cooldown_rate_bps) / 10_000
             } else {
                 delegation.stake
             };

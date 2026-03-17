@@ -7,6 +7,28 @@ use crate::cli::Cli;
 use crate::constants::KEYPAIR_SIZE;
 use crate::error::ValidatorError;
 
+/// Write keypair bytes to a file with restricted permissions (0o600 on Unix).
+fn write_keypair_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)
+    }
+}
+
 pub(crate) fn load_or_generate_keypair(cli: &Cli) -> Result<Keypair, ValidatorError> {
     if let Some(path) = &cli.identity {
         // --identity flag: load from explicit path
@@ -27,7 +49,7 @@ pub(crate) fn load_or_generate_keypair(cli: &Cli) -> Result<Keypair, ValidatorEr
             if let Some(parent) = keypair_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            match std::fs::write(&keypair_path, &bytes) {
+            match write_keypair_file(&keypair_path, &bytes) {
                 Ok(()) => info!(path = %keypair_path.display(), "saved identity keypair"),
                 Err(e) => warn!(error = %e, "failed to save identity keypair"),
             }
@@ -48,6 +70,9 @@ pub(crate) fn load_keypair_from_path(path: &str) -> Result<Keypair, ValidatorErr
         .map_err(|e| ValidatorError::Keypair(format!("invalid keypair: {e}")))
 }
 
+/// Resolve a hostname to an IP address.
+///
+/// Blocking DNS is acceptable here — runs once at startup before the async loop.
 pub(crate) fn resolve_public_host(host: &str) -> Result<std::net::IpAddr, ValidatorError> {
     // Try parsing as IP first
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {

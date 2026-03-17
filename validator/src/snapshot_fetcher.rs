@@ -7,7 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
-use nusantara_crypto::hash;
+use futures_util::StreamExt;
+use nusantara_crypto::Hasher;
+use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
 use crate::error::ValidatorError;
@@ -96,7 +98,7 @@ pub async fn fetch_snapshot_from_entrypoints(
         return Ok(None);
     };
 
-    // 2. Download the snapshot binary
+    // 2. Download the snapshot binary via streaming to avoid OOM on large snapshots
     let download_url = format!("{rpc_base}/v1/snapshot/download");
     info!(url = %download_url, slot = info.slot, "downloading snapshot");
 
@@ -114,20 +116,40 @@ pub async fn fetch_snapshot_from_entrypoints(
         return Ok(None);
     }
 
-    let bytes = resp
-        .bytes()
+    // Stream response body to a temp file, hashing incrementally
+    tokio::fs::create_dir_all(snapshot_dir)
         .await
-        .map_err(|e| ValidatorError::NetworkInit(format!("failed to read snapshot body: {e}")))?;
+        .map_err(ValidatorError::Io)?;
+
+    let tmp_path = snapshot_dir.join(format!("snapshot-{}.bin.tmp", info.slot));
+    let mut tmp_file = tokio::fs::File::create(&tmp_path)
+        .await
+        .map_err(ValidatorError::Io)?;
+
+    let mut hasher = Hasher::default();
+    let mut total_bytes: u64 = 0;
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| {
+            ValidatorError::NetworkInit(format!("failed to read snapshot chunk: {e}"))
+        })?;
+        hasher.update(&chunk);
+        tmp_file.write_all(&chunk).await.map_err(ValidatorError::Io)?;
+        total_bytes += chunk.len() as u64;
+    }
+    tmp_file.flush().await.map_err(ValidatorError::Io)?;
+    drop(tmp_file);
 
     info!(
-        size_bytes = bytes.len(),
+        size_bytes = total_bytes,
         slot = info.slot,
         "snapshot downloaded"
     );
 
     // 3. Verify SHA3-512 hash if provided
     if let Some(ref expected_hash) = info.file_hash {
-        let computed = hash(&bytes);
+        let computed = hasher.finalize();
         let computed_b64 = computed.to_base64();
         if &computed_b64 != expected_hash {
             warn!(
@@ -135,6 +157,7 @@ pub async fn fetch_snapshot_from_entrypoints(
                 computed = computed_b64,
                 "snapshot hash mismatch — discarding"
             );
+            let _ = tokio::fs::remove_file(&tmp_path).await;
             return Ok(None);
         }
         info!("snapshot hash verified");
@@ -142,11 +165,11 @@ pub async fn fetch_snapshot_from_entrypoints(
         warn!("entrypoint did not provide file_hash — skipping verification");
     }
 
-    // 4. Save to snapshot directory
-    std::fs::create_dir_all(snapshot_dir).map_err(ValidatorError::Io)?;
-
+    // 4. Atomic rename .tmp → final destination
     let dest = snapshot_dir.join(format!("snapshot-{}.bin", info.slot));
-    std::fs::write(&dest, &bytes).map_err(ValidatorError::Io)?;
+    tokio::fs::rename(&tmp_path, &dest)
+        .await
+        .map_err(ValidatorError::Io)?;
 
     info!(
         path = %dest.display(),

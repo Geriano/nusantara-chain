@@ -322,6 +322,10 @@ fn spawn_repair_responder(
 ) {
     tokio::spawn(async move {
         let mut buf = vec![0u8; MAX_UDP_PACKET];
+        let shred_cache: Arc<parking_lot::Mutex<lru::LruCache<u64, Arc<nusantara_turbine::ShredBatch>>>> =
+            Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
+                std::num::NonZero::new(64).unwrap(),
+            )));
         loop {
             tokio::select! {
                 biased;
@@ -340,17 +344,32 @@ fn spawn_repair_responder(
                                         | RepairRequest::Orphan { slot } => *slot,
                                     };
                                     tracing::debug!(slot, ?request, %src, "received repair request");
-                                    let block = match storage.get_block(slot) {
-                                        Ok(Some(b)) => b,
-                                        _ => continue,
-                                    };
-                                    let shred_batch = match Shredder::shred_block(
-                                        &block,
-                                        block.header.parent_slot,
-                                        &keypair,
-                                    ) {
-                                        Ok(b) => b,
-                                        Err(_) => continue,
+
+                                    // Check LRU cache first, then fetch + re-shred on miss
+                                    let shred_batch = {
+                                        let mut cache = shred_cache.lock();
+                                        if let Some(cached) = cache.get(&slot) {
+                                            metrics::counter!("turbine_repair_cache_hits").increment(1);
+                                            Arc::clone(cached)
+                                        } else {
+                                            drop(cache);
+                                            let block = match storage.get_block(slot) {
+                                                Ok(Some(b)) => b,
+                                                _ => continue,
+                                            };
+                                            let batch = match Shredder::shred_block(
+                                                &block,
+                                                block.header.parent_slot,
+                                                &keypair,
+                                            ) {
+                                                Ok(b) => Arc::new(b),
+                                                Err(_) => continue,
+                                            };
+                                            let mut cache = shred_cache.lock();
+                                            cache.put(slot, Arc::clone(&batch));
+                                            metrics::counter!("turbine_repair_cache_misses").increment(1);
+                                            batch
+                                        }
                                     };
                                     match request {
                                         RepairRequest::Shred { index, .. } => {

@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use borsh::BorshDeserialize;
 use nusantara_consensus::bank::ConsensusBank;
@@ -225,7 +224,7 @@ impl ValidatorNode {
         let current_slot = slot_clock.current_slot().max(last_root + 1);
 
         // 11. Create ProgramCache
-        let program_cache = Arc::new(ProgramCache::new(256));
+        let program_cache = Arc::new(ProgramCache::new(crate::constants::PROGRAM_CACHE_SIZE));
 
         // 12. Create BlockProducer
         let block_producer = BlockProducer::new(
@@ -291,10 +290,7 @@ impl ValidatorNode {
                 )
             };
 
-        let wallclock = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time went backwards")
-            .as_millis() as u64;
+        let wallclock = crate::helpers::unix_timestamp_millis();
 
         let contact_info = ContactInfo::new(
             keypair.public_key().clone(),
@@ -315,6 +311,7 @@ impl ValidatorNode {
                 if let Ok(addr) = ep.parse() {
                     return Some(addr);
                 }
+                // Blocking DNS is acceptable here — runs once at startup before async loop.
                 match std::net::ToSocketAddrs::to_socket_addrs(&ep.as_str()) {
                     Ok(mut addrs) => {
                         if let Some(addr) = addrs.next() {
@@ -337,7 +334,7 @@ impl ValidatorNode {
             Arc::clone(&keypair),
             contact_info,
             entrypoints,
-            60_000,
+            crate::constants::CLUSTER_INFO_TIMEOUT_MS,
         ));
 
         // 16. Build ReplayStage
@@ -426,6 +423,7 @@ impl ValidatorNode {
             pubsub_tx: RpcState::new_pubsub_channel(),
             orphan_blocks: BTreeMap::new(),
             shred_collector: Arc::new(ShredCollector::new()),
+            snapshot_dir: Path::new(&cli.ledger_path).join("snapshots"),
             failed_fork_targets: HashSet::new(),
             last_voted_slot: current_slot,
         })
