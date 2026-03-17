@@ -70,7 +70,7 @@ impl TxValidator {
 
         // Verify signatures (Dilithium verification at ingress)
         if let Err(e) = tx.verify_signatures() {
-            metrics::counter!("tpu_signature_failures_total").increment(1);
+            metrics::counter!("nusantara_tpu_signature_failures_total").increment(1);
             return Err(TpuError::InvalidTransaction(format!(
                 "signature verification failed: {e}"
             )));

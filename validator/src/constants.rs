@@ -8,7 +8,7 @@ pub(crate) const KEYPAIR_SIZE: usize = 1952 + 4032;
 
 /// Maximum age (in slots) for orphan blocks and fork branches before they are
 /// considered stale. Orphans older than this are evicted and no longer block
-/// root advancement. 32 slots = 28.8s at 900ms/slot.
+/// root advancement. 32 slots = 12.8s at 400ms/slot.
 pub(crate) const ORPHAN_HORIZON: u64 = 32;
 
 /// Safety valve for root advancement: if the gap between proposed and current

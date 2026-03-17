@@ -30,7 +30,7 @@ pub async fn get_signatures(
     Path(address): Path<String>,
     Query(query): Query<SignaturesQuery>,
 ) -> Result<Json<SignaturesResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "signatures").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "signatures").increment(1);
 
     let hash = Hash::from_base64(&address)
         .map_err(|e| RpcError::BadRequest(format!("invalid address: {e}")))?;

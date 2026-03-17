@@ -55,7 +55,7 @@ pub struct Cli {
     pub enable_faucet: bool,
 
     /// Timeout in ms to wait for a block from the leader before considering the slot skipped
-    #[arg(long, default_value = "1800")]
+    #[arg(long, default_value = "800")]
     pub leader_timeout_ms: u64,
 
     /// Interval in slots between automatic snapshots (0 = disabled)

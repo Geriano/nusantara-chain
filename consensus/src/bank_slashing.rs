@@ -11,8 +11,8 @@ impl ConsensusBank {
             .entry(*validator)
             .and_modify(|total| *total = total.saturating_add(amount))
             .or_insert(amount);
-        metrics::counter!("slashing_penalties_applied").increment(1);
-        metrics::counter!("slashing_total_slashed_lamports").increment(amount);
+        metrics::counter!("nusantara_slashing_penalties_applied").increment(1);
+        metrics::counter!("nusantara_slashing_total_slashed_lamports").increment(amount);
     }
 
     /// Get total slashed amount for a validator.

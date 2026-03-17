@@ -4,7 +4,7 @@ token_name = "NUSA"
 
 [timing]
 slots_per_epoch = 432_000
-slot_duration_ms = 900
+slot_duration_ms = 400
 leader_schedule_slot_offset = 432_000
 
 [fee]

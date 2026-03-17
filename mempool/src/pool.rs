@@ -88,7 +88,7 @@ impl Mempool {
     /// Rejects duplicates (by transaction hash). When the pool is at capacity,
     /// evicts the lowest-priority entry if the new transaction has strictly higher
     /// priority; otherwise returns `MempoolError::Full`.
-    #[instrument(skip_all, name = "mempool_insert")]
+    #[instrument(skip_all, name = "nusantara_mempool_insert")]
     pub fn insert(&self, tx: Transaction) -> Result<(), MempoolError> {
         let tx_hash = tx.hash();
 
@@ -96,7 +96,7 @@ impl Mempool {
         {
             let dedup = self.dedup.read();
             if dedup.contains_key(&tx_hash) {
-                metrics::counter!("mempool_duplicates").increment(1);
+                metrics::counter!("nusantara_mempool_duplicates").increment(1);
                 return Err(MempoolError::DuplicateTransaction);
             }
         }
@@ -110,7 +110,7 @@ impl Mempool {
             if let Some(&count) = counts.get(&payer)
                 && count >= self.max_txs_per_account
             {
-                metrics::counter!("mempool_account_limit_rejected").increment(1);
+                metrics::counter!("nusantara_mempool_account_limit_rejected").increment(1);
                 return Err(MempoolError::AccountLimitExceeded {
                     payer,
                     limit: self.max_txs_per_account,
@@ -142,7 +142,7 @@ impl Mempool {
 
         // Re-check dedup under write lock (another thread may have inserted concurrently)
         if dedup.contains_key(&tx_hash) {
-            metrics::counter!("mempool_duplicates").increment(1);
+            metrics::counter!("nusantara_mempool_duplicates").increment(1);
             return Err(MempoolError::DuplicateTransaction);
         }
 
@@ -150,7 +150,7 @@ impl Mempool {
         if let Some(&count) = counts.get(&payer)
             && count >= self.max_txs_per_account
         {
-            metrics::counter!("mempool_account_limit_rejected").increment(1);
+            metrics::counter!("nusantara_mempool_account_limit_rejected").increment(1);
             return Err(MempoolError::AccountLimitExceeded {
                 payer,
                 limit: self.max_txs_per_account,
@@ -163,7 +163,7 @@ impl Mempool {
             if let Some((worst_key, _)) = pool.last_key_value() {
                 if key >= *worst_key {
                     // New transaction is not better than the worst in pool
-                    metrics::counter!("mempool_rejected_full").increment(1);
+                    metrics::counter!("nusantara_mempool_rejected_full").increment(1);
                     return Err(MempoolError::Full {
                         capacity: self.max_capacity,
                     });
@@ -178,7 +178,7 @@ impl Mempool {
                     if counts.get(&evicted.payer).copied().unwrap_or(0) == 0 {
                         counts.remove(&evicted.payer);
                     }
-                    metrics::counter!("mempool_evictions").increment(1);
+                    metrics::counter!("nusantara_mempool_evictions").increment(1);
                 }
             }
         }
@@ -187,8 +187,8 @@ impl Mempool {
         *counts.entry(payer).or_insert(0) += 1;
         pool.insert(key, entry);
 
-        metrics::gauge!("mempool_size").set(pool.len() as f64);
-        metrics::counter!("mempool_inserts").increment(1);
+        metrics::gauge!("nusantara_mempool_size").set(pool.len() as f64);
+        metrics::counter!("nusantara_mempool_inserts").increment(1);
 
         Ok(())
     }
@@ -197,7 +197,7 @@ impl Mempool {
     ///
     /// Returns transactions ordered from highest to lowest priority.
     /// Drained transactions are removed from the pool and dedup index.
-    #[instrument(skip_all, name = "mempool_drain")]
+    #[instrument(skip_all, name = "nusantara_mempool_drain")]
     pub fn drain_by_priority(&self, max: usize) -> Vec<Transaction> {
         let mut pool = self.pool.write();
         let mut dedup = self.dedup.write();
@@ -223,8 +223,8 @@ impl Mempool {
             }
         }
 
-        metrics::gauge!("mempool_size").set(pool.len() as f64);
-        metrics::counter!("mempool_drains").increment(result.len() as u64);
+        metrics::gauge!("nusantara_mempool_size").set(pool.len() as f64);
+        metrics::counter!("nusantara_mempool_drains").increment(result.len() as u64);
 
         result
     }
@@ -234,7 +234,7 @@ impl Mempool {
     /// Uses `HashSet` for O(1) lookup instead of linear scan.
     /// This should be called periodically (e.g., every 10 slots) with the current
     /// valid blockhashes from the bank's slot hashes sysvar.
-    #[instrument(skip_all, name = "mempool_remove_expired")]
+    #[instrument(skip_all, name = "nusantara_mempool_remove_expired")]
     pub fn remove_expired(&self, valid_blockhashes: &HashSet<Hash>) {
         let mut pool = self.pool.write();
         let mut dedup = self.dedup.write();
@@ -265,8 +265,8 @@ impl Mempool {
 
         let removed = before - pool.len();
         if removed > 0 {
-            metrics::gauge!("mempool_size").set(pool.len() as f64);
-            metrics::counter!("mempool_expired").increment(removed as u64);
+            metrics::gauge!("nusantara_mempool_size").set(pool.len() as f64);
+            metrics::counter!("nusantara_mempool_expired").increment(removed as u64);
             tracing::debug!(removed, "expired transactions removed from mempool");
         }
     }
@@ -279,6 +279,11 @@ impl Mempool {
     /// Returns `true` if the pool contains no transactions.
     pub fn is_empty(&self) -> bool {
         self.pool.read().is_empty()
+    }
+
+    /// Returns `true` if a transaction with the given hash is currently in the pool.
+    pub fn contains(&self, tx_hash: &Hash) -> bool {
+        self.dedup.read().contains_key(tx_hash)
     }
 }
 
@@ -492,6 +497,32 @@ mod tests {
         // Empty valid set removes everything
         pool.remove_expired(&HashSet::new());
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn contains_after_insert() {
+        let pool = Mempool::new(100);
+        let bh = hash(b"blockhash");
+        let tx = make_tx(0, bh);
+        let tx_hash = tx.hash();
+
+        assert!(!pool.contains(&tx_hash));
+        pool.insert(tx).unwrap();
+        assert!(pool.contains(&tx_hash));
+    }
+
+    #[test]
+    fn contains_after_drain() {
+        let pool = Mempool::new(100);
+        let bh = hash(b"blockhash");
+        let tx = make_tx(0, bh);
+        let tx_hash = tx.hash();
+
+        pool.insert(tx).unwrap();
+        assert!(pool.contains(&tx_hash));
+
+        pool.drain_by_priority(10);
+        assert!(!pool.contains(&tx_hash));
     }
 
     #[test]

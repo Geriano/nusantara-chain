@@ -110,13 +110,17 @@ pub async fn airdrop(
 }
 
 /// Poll `/v1/transaction/{sig}` until confirmed or timeout.
+///
+/// Uses exponential backoff starting at 50ms, doubling up to 2s.
+/// Recognises the `"received"` status (transaction in mempool, not yet confirmed).
 pub async fn wait_for_confirmation(
     client: &NusantaraClient,
     signature: &str,
     timeout: Duration,
 ) -> Result<TransactionStatusResponse, E2eError> {
     let start = Instant::now();
-    let poll_interval = Duration::from_millis(500);
+    let mut poll_interval = Duration::from_millis(50);
+    let max_interval = Duration::from_millis(2000);
 
     loop {
         if start.elapsed() > timeout {
@@ -127,10 +131,16 @@ pub async fn wait_for_confirmation(
 
         let path = format!("/v1/transaction/{signature}");
         match client.get::<TransactionStatusResponse>(&path).await {
+            Ok(status) if status.status == "received" => {
+                // Transaction is in mempool but not yet confirmed
+                tokio::time::sleep(poll_interval).await;
+                poll_interval = (poll_interval * 2).min(max_interval);
+            }
             Ok(status) => return Ok(status),
             Err(E2eError::Rpc { status: 404, .. }) => {
                 // Not yet indexed, keep polling
                 tokio::time::sleep(poll_interval).await;
+                poll_interval = (poll_interval * 2).min(max_interval);
             }
             Err(e) => return Err(e),
         }
@@ -187,7 +197,8 @@ async fn wait_for_confirmation_owned(
     timeout: Duration,
 ) -> Result<TransactionStatusResponse, E2eError> {
     let start = Instant::now();
-    let poll_interval = Duration::from_millis(500);
+    let mut poll_interval = Duration::from_millis(50);
+    let max_interval = Duration::from_millis(2000);
 
     loop {
         if start.elapsed() > timeout {
@@ -198,9 +209,15 @@ async fn wait_for_confirmation_owned(
 
         let path = format!("/v1/transaction/{signature}");
         match client.get::<TransactionStatusResponse>(&path).await {
+            Ok(status) if status.status == "received" => {
+                // Transaction is in mempool but not yet confirmed
+                tokio::time::sleep(poll_interval).await;
+                poll_interval = (poll_interval * 2).min(max_interval);
+            }
             Ok(status) => return Ok(status),
             Err(E2eError::Rpc { status: 404, .. }) => {
                 tokio::time::sleep(poll_interval).await;
+                poll_interval = (poll_interval * 2).min(max_interval);
             }
             Err(e) => return Err(e),
         }

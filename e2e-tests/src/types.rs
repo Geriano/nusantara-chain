@@ -79,6 +79,8 @@ pub struct SendTransactionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendTransactionResponse {
     pub signature: String,
+    #[serde(default)]
+    pub status: String,
 }
 
 // ── Airdrop ──

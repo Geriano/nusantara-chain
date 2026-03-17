@@ -52,7 +52,7 @@ pub async fn get_accounts_by_owner(
     Path(owner): Path<String>,
     Query(query): Query<AccountsByQuery>,
 ) -> Result<Json<AccountsByResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "accounts_by_owner").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "accounts_by_owner").increment(1);
 
     let owner_hash = Hash::from_base64(&owner)
         .map_err(|e| RpcError::BadRequest(format!("invalid owner address: {e}")))?;
@@ -100,7 +100,7 @@ pub async fn get_accounts_by_program(
     Path(program): Path<String>,
     Query(query): Query<AccountsByQuery>,
 ) -> Result<Json<AccountsByResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "accounts_by_program").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "accounts_by_program").increment(1);
 
     let program_hash = Hash::from_base64(&program)
         .map_err(|e| RpcError::BadRequest(format!("invalid program address: {e}")))?;

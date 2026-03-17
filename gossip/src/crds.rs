@@ -62,7 +62,7 @@ impl CrdsTable {
                     insert_order: order,
                 });
 
-                metrics::counter!("gossip_crds_inserts_total").increment(1);
+                metrics::counter!("nusantara_gossip_crds_inserts_total").increment(1);
                 Ok(Some(old_value))
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
@@ -73,7 +73,7 @@ impl CrdsTable {
                     insert_order: order,
                 });
 
-                metrics::counter!("gossip_crds_inserts_total").increment(1);
+                metrics::counter!("nusantara_gossip_crds_inserts_total").increment(1);
                 Ok(None)
             }
         }
@@ -127,7 +127,7 @@ impl CrdsTable {
         }
 
         if count > 0 {
-            metrics::counter!("gossip_crds_purged_total").increment(count as u64);
+            metrics::counter!("nusantara_gossip_crds_purged_total").increment(count as u64);
         }
         count
     }

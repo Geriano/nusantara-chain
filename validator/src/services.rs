@@ -336,7 +336,7 @@ fn spawn_repair_responder(
                             let data = &buf[..len];
                             match TurbineMessage::deserialize_from_bytes(data) {
                                 Ok(TurbineMessage::RepairRequest(request)) => {
-                                    metrics::counter!("turbine_repair_requests_received")
+                                    metrics::counter!("nusantara_turbine_repair_requests_received")
                                         .increment(1);
                                     let slot = match &request {
                                         RepairRequest::Shred { slot, .. }
@@ -350,7 +350,7 @@ fn spawn_repair_responder(
                                     // Lock scope is kept tight to avoid holding across .await.
                                     let cached = shred_cache.lock().get(&slot).cloned();
                                     let shred_batch = if let Some(batch) = cached {
-                                        metrics::counter!("turbine_repair_cache_hits").increment(1);
+                                        metrics::counter!("nusantara_turbine_repair_cache_hits").increment(1);
                                         batch
                                     } else {
                                         // Offload blocking RocksDB read to spawn_blocking
@@ -370,7 +370,7 @@ fn spawn_repair_responder(
                                             _ => continue,
                                         };
                                         shred_cache.lock().put(slot, Arc::clone(&batch));
-                                        metrics::counter!("turbine_repair_cache_misses").increment(1);
+                                        metrics::counter!("nusantara_turbine_repair_cache_misses").increment(1);
                                         batch
                                     };
                                     match request {
@@ -450,7 +450,7 @@ fn spawn_repair_responder(
                                             }
                                         }
                                     }
-                                    metrics::counter!("turbine_repair_responses_sent")
+                                    metrics::counter!("nusantara_turbine_repair_responses_sent")
                                         .increment(1);
                                 }
                                 Ok(TurbineMessage::RepairResponse(shred)) => {
@@ -460,7 +460,7 @@ fn spawn_repair_responder(
                                         %src,
                                         "received repair response shred"
                                     );
-                                    metrics::counter!("turbine_repair_shreds_received")
+                                    metrics::counter!("nusantara_turbine_repair_shreds_received")
                                         .increment(1);
                                     let _ = shred_tx.send((shred, src)).await;
                                 }
@@ -472,7 +472,7 @@ fn spawn_repair_responder(
                                         "received batch repair response"
                                     );
                                     let count = batch.shreds.len() as u64;
-                                    metrics::counter!("turbine_repair_shreds_received")
+                                    metrics::counter!("nusantara_turbine_repair_shreds_received")
                                         .increment(count);
                                     for shred in batch.shreds {
                                         let _ = shred_tx.send((shred, src)).await;

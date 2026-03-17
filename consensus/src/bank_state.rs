@@ -27,7 +27,7 @@ impl ConsensusBank {
         let bank_hash = Self::compute_bank_hash(parent_bank_hash, account_delta_hash);
         let epoch = self.epoch_schedule.get_epoch(slot);
 
-        metrics::counter!("bank_slots_frozen_total").increment(1);
+        metrics::counter!("nusantara_bank_slots_frozen_total").increment(1);
 
         FrozenBankState {
             slot,
@@ -86,7 +86,7 @@ impl ConsensusBank {
     pub fn update_state_tree(&self, deltas: &[(Hash, Account)]) {
         let mut tree = self.state_tree.lock();
         tree.update(deltas);
-        metrics::gauge!("state_tree_leaf_count").set(tree.len() as f64);
+        metrics::gauge!("nusantara_state_tree_leaf_count").set(tree.len() as f64);
     }
 
     /// Compute the current state Merkle root.

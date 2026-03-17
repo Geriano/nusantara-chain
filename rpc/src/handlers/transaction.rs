@@ -27,15 +27,31 @@ pub async fn get_transaction(
     State(state): State<Arc<RpcState>>,
     Path(hash): Path<String>,
 ) -> Result<Json<TransactionStatusResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "transaction").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "transaction").increment(1);
 
     let tx_hash =
         Hash::from_base64(&hash).map_err(|e| RpcError::BadRequest(format!("invalid hash: {e}")))?;
 
-    let meta = state
-        .storage
-        .get_transaction_status(&tx_hash)?
-        .ok_or_else(|| RpcError::NotFound(format!("transaction {hash} not found")))?;
+    let meta = match state.storage.get_transaction_status(&tx_hash)? {
+        Some(m) => m,
+        None => {
+            // Check mempool for "received" status
+            if state.mempool.contains(&tx_hash) {
+                return Ok(Json(TransactionStatusResponse {
+                    signature: hash,
+                    slot: 0,
+                    status: "received".to_string(),
+                    fee: 0,
+                    pre_balances: vec![],
+                    post_balances: vec![],
+                    compute_units_consumed: 0,
+                }));
+            }
+            return Err(RpcError::NotFound(format!(
+                "transaction {hash} not found"
+            )));
+        }
+    };
 
     let status_str = match &meta.status {
         TransactionStatus::Success => "success".to_string(),
@@ -66,7 +82,7 @@ pub async fn send_transaction(
     State(state): State<Arc<RpcState>>,
     Json(req): Json<SendTransactionRequest>,
 ) -> Result<Json<SendTransactionResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "send_transaction").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "send_transaction").increment(1);
 
     let bytes = URL_SAFE_NO_PAD
         .decode(&req.transaction)
@@ -87,7 +103,10 @@ pub async fn send_transaction(
         let _ = fwd.try_send(tx);
     }
 
-    metrics::counter!("rpc_transactions_submitted").increment(1);
+    metrics::counter!("nusantara_rpc_transactions_submitted").increment(1);
 
-    Ok(Json(SendTransactionResponse { signature }))
+    Ok(Json(SendTransactionResponse {
+        signature,
+        status: "received".to_string(),
+    }))
 }

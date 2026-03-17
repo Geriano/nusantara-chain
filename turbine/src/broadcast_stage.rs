@@ -86,8 +86,8 @@ impl BroadcastStage {
             }
         }
 
-        metrics::counter!("turbine_broadcast_total").increment(1);
-        metrics::histogram!("turbine_shreds_per_broadcast")
+        metrics::counter!("nusantara_turbine_broadcast_total").increment(1);
+        metrics::histogram!("nusantara_turbine_shreds_per_broadcast")
             .record((batch.data_shreds.len() + batch.code_shreds.len()) as f64);
 
         Ok(())

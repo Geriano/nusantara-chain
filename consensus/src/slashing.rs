@@ -62,7 +62,7 @@ impl SlashDetector {
                         slot,
                         "double vote detected"
                     );
-                    metrics::counter!("slashing_double_votes_detected").increment(1);
+                    metrics::counter!("nusantara_slashing_double_votes_detected").increment(1);
 
                     Some(proof)
                 } else {

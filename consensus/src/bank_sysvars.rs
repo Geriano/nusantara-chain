@@ -17,7 +17,7 @@ impl ConsensusBank {
         clock.epoch = epoch;
         clock.leader_schedule_epoch = epoch + 1;
 
-        metrics::gauge!("bank_current_slot").set(slot as f64);
+        metrics::gauge!("nusantara_bank_current_slot").set(slot as f64);
     }
 
     /// Update slot hashes sysvar.

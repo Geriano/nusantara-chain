@@ -149,7 +149,7 @@ Transactions arrive as `TpuMessage` variants, Borsh-serialized:
 The `TxValidator` performs lightweight structural checks on incoming
 transactions. Signature verification is **not** performed at this stage to
 maximize throughput. Invalid structures are rejected with a metric bump
-(`tpu_invalid_transactions_total`).
+(`nusantara_tpu_invalid_transactions_total`).
 
 ### 2.4 Leader Routing
 
@@ -180,9 +180,9 @@ current_slot = (now_ms - genesis_creation_time_ms) / slot_duration_ms
 
 | Parameter | Value |
 |-----------|-------|
-| `slot_duration_ms` | 900 |
+| `slot_duration_ms` | 400 |
 | `slots_per_epoch` | 432,000 |
-| Epoch duration | ~4.5 days |
+| Epoch duration | ~2 days |
 
 ### 3.2 Block Production Pipeline
 
@@ -424,11 +424,11 @@ Key metrics emitted during the transaction lifecycle:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `rpc_transactions_submitted` | Counter | Transactions received via RPC |
-| `tpu_transactions_received_total` | Counter | Transactions received via TPU QUIC |
-| `tpu_invalid_transactions_total` | Counter | Structurally invalid transactions |
-| `tpu_local_forward_total` | Counter | Batches forwarded to local block producer |
-| `tpu_remote_forward_total` | Counter | Batches forwarded to remote leader |
+| `nusantara_rpc_transactions_submitted` | Counter | Transactions received via RPC |
+| `nusantara_tpu_transactions_received_total` | Counter | Transactions received via TPU QUIC |
+| `nusantara_tpu_invalid_transactions_total` | Counter | Structurally invalid transactions |
+| `nusantara_tpu_local_forward_total` | Counter | Batches forwarded to local block producer |
+| `nusantara_tpu_remote_forward_total` | Counter | Batches forwarded to remote leader |
 | `nusantara_blocks_produced` | Counter | Total blocks produced |
 | `nusantara_block_time_ms` | Histogram | Block production time |
 | `nusantara_transactions_per_slot` | Gauge | Transactions in the latest slot |

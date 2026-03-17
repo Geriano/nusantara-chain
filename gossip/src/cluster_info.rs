@@ -122,7 +122,7 @@ impl ClusterInfo {
         match pubkey {
             Some(pk) => {
                 if !value.verify(&pk) {
-                    metrics::counter!("gossip_invalid_signature_total").increment(1);
+                    metrics::counter!("nusantara_gossip_invalid_signature_total").increment(1);
                     tracing::debug!(
                         origin = ?value.origin(),
                         label = %value.label(),
@@ -133,7 +133,7 @@ impl ClusterInfo {
             }
             None => {
                 // Non-ContactInfo from unknown peer — reject
-                metrics::counter!("gossip_unverifiable_value_dropped_total").increment(1);
+                metrics::counter!("nusantara_gossip_unverifiable_value_dropped_total").increment(1);
                 tracing::debug!(
                     origin = ?value.origin(),
                     label = %value.label(),

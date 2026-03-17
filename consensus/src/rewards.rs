@@ -149,8 +149,8 @@ impl RewardsCalculator {
             total_distributed += staker_share + validator_share;
         }
 
-        metrics::counter!("rewards_epochs_calculated_total").increment(1);
-        metrics::gauge!("rewards_total_distributed").set(total_distributed as f64);
+        metrics::counter!("nusantara_rewards_epochs_calculated_total").increment(1);
+        metrics::gauge!("nusantara_rewards_total_distributed").set(total_distributed as f64);
 
         Ok(EpochRewards {
             epoch,

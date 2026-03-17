@@ -67,7 +67,7 @@ fn build_schedule_response(
 pub async fn get_leader_schedule(
     State(state): State<Arc<RpcState>>,
 ) -> Result<Json<LeaderScheduleResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "leader_schedule").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "leader_schedule").increment(1);
 
     let epoch = state.bank.current_epoch();
     let response = build_schedule_response(&state, epoch)?;
@@ -88,7 +88,7 @@ pub async fn get_leader_schedule_epoch(
     State(state): State<Arc<RpcState>>,
     Path(epoch): Path<u64>,
 ) -> Result<Json<LeaderScheduleResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "leader_schedule_epoch").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "leader_schedule_epoch").increment(1);
 
     let response = build_schedule_response(&state, epoch)?;
     Ok(Json(response))

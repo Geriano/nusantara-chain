@@ -24,7 +24,7 @@ pub async fn airdrop(
     State(state): State<Arc<RpcState>>,
     Json(req): Json<AirdropRequest>,
 ) -> Result<Json<AirdropResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "airdrop").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "airdrop").increment(1);
 
     let faucet_keypair = state
         .faucet_keypair
@@ -74,7 +74,7 @@ pub async fn airdrop(
         let _ = fwd.try_send(tx);
     }
 
-    metrics::counter!("rpc_airdrops").increment(1);
+    metrics::counter!("nusantara_rpc_airdrops").increment(1);
 
     Ok(Json(AirdropResponse { signature }))
 }

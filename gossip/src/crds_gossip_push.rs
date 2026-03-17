@@ -88,7 +88,7 @@ impl CrdsGossipPush {
         for origin in origins {
             prune_set.insert((pruner, *origin));
         }
-        metrics::counter!("gossip_prune_messages_total").increment(1);
+        metrics::counter!("nusantara_gossip_prune_messages_total").increment(1);
     }
 
     /// Reset prune state (called periodically).

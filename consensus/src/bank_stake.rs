@@ -106,8 +106,8 @@ impl ConsensusBank {
         *self.epoch_stakes.write() = new_stakes;
         *self.total_active_stake.write() = total;
 
-        metrics::gauge!("bank_total_active_stake").set(total as f64);
-        metrics::gauge!("bank_epoch_stake_validators").set(validator_count as f64);
+        metrics::gauge!("nusantara_bank_total_active_stake").set(total as f64);
+        metrics::gauge!("nusantara_bank_epoch_stake_validators").set(validator_count as f64);
     }
 }
 

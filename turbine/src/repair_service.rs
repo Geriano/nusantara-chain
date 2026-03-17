@@ -85,7 +85,7 @@ impl RepairService {
                                 }
                                 debug!(slot = *slot, peers = peers.len(), "broadcast HighestShred repair request");
                             }
-                            metrics::counter!("turbine_repair_requests_total").increment(1);
+                            metrics::counter!("nusantara_turbine_repair_requests_total").increment(1);
                             continue;
                         }
 
@@ -109,7 +109,7 @@ impl RepairService {
                                 shred_count = self.collector.shred_count(*slot),
                                 "requesting HighestShred — have shreds but missing last index"
                             );
-                            metrics::counter!("turbine_repair_requests_total").increment(1);
+                            metrics::counter!("nusantara_turbine_repair_requests_total").increment(1);
                             continue;
                         }
 
@@ -131,7 +131,7 @@ impl RepairService {
 
                         let chunk_count =
                             missing.len().div_ceil(MAX_REPAIR_BATCH_REQUEST as usize);
-                        metrics::counter!("turbine_repair_requests_total")
+                        metrics::counter!("nusantara_turbine_repair_requests_total")
                             .increment(chunk_count as u64);
                     }
                 }

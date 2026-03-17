@@ -46,6 +46,11 @@ pub enum PubsubEvent {
         block_hash: String,
         tx_count: u64,
     },
+    SignatureNotification {
+        signature: String,
+        slot: u64,
+        status: String,
+    },
 }
 
 #[derive(Clone)]

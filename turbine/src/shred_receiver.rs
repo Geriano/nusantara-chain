@@ -36,14 +36,14 @@ impl ShredReceiver {
                             let data = &buf[..len];
                             match TurbineMessage::deserialize_from_bytes(data) {
                                 Ok(TurbineMessage::Shred(shred)) => {
-                                    metrics::counter!("turbine_shreds_received_total").increment(1);
+                                    metrics::counter!("nusantara_turbine_shreds_received_total").increment(1);
                                     if shred_sender.send((shred, src)).await.is_err() {
                                         debug!("shred channel closed");
                                         break;
                                     }
                                 }
                                 Ok(TurbineMessage::RepairResponse(shred)) => {
-                                    metrics::counter!("turbine_repair_shreds_received").increment(1);
+                                    metrics::counter!("nusantara_turbine_repair_shreds_received").increment(1);
                                     if shred_sender.send((shred, src)).await.is_err() {
                                         debug!("shred channel closed");
                                         break;
@@ -51,7 +51,7 @@ impl ShredReceiver {
                                 }
                                 Ok(TurbineMessage::BatchRepairResponse(batch)) => {
                                     let count = batch.shreds.len() as u64;
-                                    metrics::counter!("turbine_repair_shreds_received").increment(count);
+                                    metrics::counter!("nusantara_turbine_repair_shreds_received").increment(count);
                                     for shred in batch.shreds {
                                         if shred_sender.send((shred, src)).await.is_err() {
                                             debug!("shred channel closed");

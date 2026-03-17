@@ -61,7 +61,7 @@ impl RateLimiter {
         if entry.tx_count >= self.max_tx_per_sec_per_ip {
             // Undo the global increment since this tx is rejected
             self.global_count.fetch_sub(1, Ordering::SeqCst);
-            metrics::counter!("tpu_rate_limited_per_ip_total").increment(1);
+            metrics::counter!("nusantara_tpu_rate_limited_per_ip_total").increment(1);
             return Err(crate::error::TpuError::RateLimited {
                 reason: format!("per-IP limit exceeded: {ip}"),
             });
@@ -83,7 +83,7 @@ impl RateLimiter {
         let count = self.global_count.fetch_add(1, Ordering::SeqCst);
         if count >= self.max_tx_per_sec_global {
             self.global_count.fetch_sub(1, Ordering::SeqCst);
-            metrics::counter!("tpu_rate_limited_global_total").increment(1);
+            metrics::counter!("nusantara_tpu_rate_limited_global_total").increment(1);
             return Err(crate::error::TpuError::RateLimited {
                 reason: "global rate limit exceeded".to_string(),
             });

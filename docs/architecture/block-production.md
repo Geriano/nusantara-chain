@@ -12,7 +12,7 @@ creation time and a fixed slot duration.
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
-| Slot duration | 900ms | `core/config.toml` (`slot_duration_ms`) |
+| Slot duration | 400ms | `core/config.toml` (`slot_duration_ms`) |
 | Ticks per slot | 64 | `consensus/config.toml` (`ticks_per_slot`) |
 | Hashes per tick | 12,500 | `consensus/config.toml` (`hashes_per_tick`) |
 | Target tick duration | 14.062us | `consensus/config.toml` (`target_tick_duration_us`) |
@@ -294,11 +294,11 @@ Every block contains multiple hashes serving different purposes:
 
 | Hash | Derivation | Purpose |
 |------|------------|---------|
-| `poh_hash` | End of PoH chain for slot (800,000 sequential SHA3-512 hashes) | Verifiable passage of time |
+| `nusantara_poh_hash` | End of PoH chain for slot (800,000 sequential SHA3-512 hashes) | Verifiable passage of time |
 | `merkle_root` | MerkleTree of all transaction hashes in the block | Transaction inclusion proof |
 | `block_hash` | `hashv([parent_hash, slot_le_bytes, poh_hash])` | Block identity, chain linkage |
 | `account_delta_hash` | Hash of all account state changes in the slot | State transition integrity |
-| `bank_hash` | `hashv([parent_bank_hash, account_delta_hash])` | Full cumulative state digest |
+| `nusantara_bank_hash` | `hashv([parent_bank_hash, account_delta_hash])` | Full cumulative state digest |
 | `state_root` | Root of incremental Merkle tree over all accounts | State proof root for light clients |
 
 ### Hash Dependency Graph
@@ -355,12 +355,12 @@ Metrics emitted during block production:
 | `nusantara_block_time_ms` | Histogram | Time to produce a block (ms) |
 | `nusantara_transactions_per_slot` | Gauge | Transactions in the latest slot |
 | `nusantara_state_tree_leaves` | Gauge | Number of accounts in state tree |
-| `poh_hash_iterations_total` | Counter | Total PoH hash iterations |
-| `poh_records_total` | Counter | Transaction hashes mixed into PoH |
-| `poh_ticks_total` | Counter | PoH ticks produced |
-| `poh_slots_produced_total` | Counter | PoH slots produced |
-| `gpu_poh_entries_verified_total` | Counter | PoH entries verified on GPU |
-| `bank_slots_frozen_total` | Counter | Slots frozen in consensus bank |
+| `nusantara_poh_hash_iterations_total` | Counter | Total PoH hash iterations |
+| `nusantara_poh_records_total` | Counter | Transaction hashes mixed into PoH |
+| `nusantara_poh_ticks_total` | Counter | PoH ticks produced |
+| `nusantara_poh_slots_produced_total` | Counter | PoH slots produced |
+| `nusantara_gpu_poh_entries_verified_total` | Counter | PoH entries verified on GPU |
+| `nusantara_bank_slots_frozen_total` | Counter | Slots frozen in consensus bank |
 
 ---
 

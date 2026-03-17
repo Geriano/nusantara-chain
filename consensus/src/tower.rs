@@ -101,9 +101,9 @@ impl Tower {
             self.vote_state.root_slot = Some(last_rooted.slot);
         }
 
-        metrics::counter!("tower_votes_processed_total").increment(1);
+        metrics::counter!("nusantara_tower_votes_processed_total").increment(1);
         if new_root.is_some() {
-            metrics::counter!("tower_roots_advanced_total").increment(1);
+            metrics::counter!("nusantara_tower_roots_advanced_total").increment(1);
         }
 
         Ok(TowerVoteResult {

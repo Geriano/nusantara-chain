@@ -160,8 +160,8 @@ impl ReplayStage {
         // Update current tip
         self.current_tip = slot;
 
-        metrics::counter!("replay_blocks_processed_total").increment(1);
-        metrics::counter!("replay_votes_processed_total").increment(vote_count);
+        metrics::counter!("nusantara_replay_blocks_processed_total").increment(1);
+        metrics::counter!("nusantara_replay_votes_processed_total").increment(vote_count);
 
         Ok(ReplayResult {
             slot,

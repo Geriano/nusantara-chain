@@ -149,7 +149,7 @@ impl LeaderScheduleGenerator {
             }
         }
 
-        metrics::counter!("leader_schedule_computed_total").increment(1);
+        metrics::counter!("nusantara_leader_schedule_computed_total").increment(1);
 
         Ok(LeaderSchedule {
             epoch,

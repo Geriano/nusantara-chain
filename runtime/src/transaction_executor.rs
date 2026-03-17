@@ -164,7 +164,7 @@ pub fn execute_transaction(
                 let post_balances = ctx.post_balances();
                 let payer = ctx.get_account(0).unwrap();
                 let payer_delta = vec![(*payer.address, payer.account.clone())];
-                metrics::counter!("runtime_transactions_failed_total").increment(1);
+                metrics::counter!("nusantara_runtime_transactions_failed_total").increment(1);
                 return TransactionResult {
                     tx_hash,
                     status: Err(e),
@@ -178,8 +178,8 @@ pub fn execute_transaction(
 
             let post_balances = ctx.post_balances();
             let deltas = ctx.collect_account_deltas();
-            metrics::counter!("runtime_transactions_executed_total").increment(1);
-            metrics::counter!("runtime_compute_units_consumed").increment(compute_units_consumed);
+            metrics::counter!("nusantara_runtime_transactions_executed_total").increment(1);
+            metrics::counter!("nusantara_runtime_compute_units_consumed").increment(compute_units_consumed);
             TransactionResult {
                 tx_hash,
                 status: Ok(()),
@@ -194,7 +194,7 @@ pub fn execute_transaction(
             let post_balances = ctx.post_balances();
             let payer = ctx.get_account(0).unwrap();
             let payer_delta = vec![(*payer.address, payer.account.clone())];
-            metrics::counter!("runtime_transactions_failed_total").increment(1);
+            metrics::counter!("nusantara_runtime_transactions_failed_total").increment(1);
             TransactionResult {
                 tx_hash,
                 status: Err(e),

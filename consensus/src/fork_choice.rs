@@ -126,7 +126,7 @@ impl ForkTree {
             },
         );
 
-        metrics::gauge!("fork_tree_node_count").set(self.nodes.len() as f64);
+        metrics::gauge!("nusantara_fork_tree_node_count").set(self.nodes.len() as f64);
         Ok(())
     }
 
@@ -154,7 +154,7 @@ impl ForkTree {
     pub fn compute_best_fork(&mut self) -> u64 {
         let best = self.find_heaviest_from(self.root_slot);
         self.best_slot = best;
-        metrics::gauge!("fork_tree_best_slot").set(best as f64);
+        metrics::gauge!("nusantara_fork_tree_best_slot").set(best as f64);
         best
     }
 
@@ -229,8 +229,8 @@ impl ForkTree {
         }
 
         self.root_slot = new_root;
-        metrics::gauge!("fork_tree_root_slot").set(new_root as f64);
-        metrics::gauge!("fork_tree_node_count").set(self.nodes.len() as f64);
+        metrics::gauge!("nusantara_fork_tree_root_slot").set(new_root as f64);
+        metrics::gauge!("nusantara_fork_tree_node_count").set(self.nodes.len() as f64);
 
         pruned
     }

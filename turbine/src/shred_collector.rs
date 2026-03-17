@@ -29,12 +29,12 @@ impl SlotShreds {
     fn insert(&mut self, shred: &SignedDataShred) -> bool {
         // Reject if shred index exceeds max
         if shred.index() >= MAX_SHREDS_PER_SLOT as u32 {
-            metrics::counter!("turbine_shreds_rejected_max_index").increment(1);
+            metrics::counter!("nusantara_turbine_shreds_rejected_max_index").increment(1);
             return false;
         }
         // Reject if slot already has too many shreds
         if self.data_shreds.len() >= MAX_SHREDS_PER_SLOT as usize {
-            metrics::counter!("turbine_shreds_rejected_max_index").increment(1);
+            metrics::counter!("nusantara_turbine_shreds_rejected_max_index").increment(1);
             return false;
         }
         if shred.is_last() {
@@ -90,7 +90,7 @@ impl ShredCollector {
         let slot = shred.slot();
 
         if self.stored_slots.contains_key(&slot) {
-            metrics::counter!("turbine_shreds_skipped_already_stored").increment(1);
+            metrics::counter!("nusantara_turbine_shreds_skipped_already_stored").increment(1);
             return None;
         }
 
@@ -105,7 +105,7 @@ impl ShredCollector {
             match Deshredder::deshred(&sorted) {
                 Ok(block) => {
                     self.slots.remove(&slot);
-                    metrics::counter!("turbine_blocks_assembled_total").increment(1);
+                    metrics::counter!("nusantara_turbine_blocks_assembled_total").increment(1);
                     Some(block)
                 }
                 Err(e) => {
@@ -203,7 +203,7 @@ impl ShredCollector {
         }
 
         if count > 0 {
-            metrics::counter!("turbine_shred_collector_slots_evicted").increment(count as u64);
+            metrics::counter!("nusantara_turbine_shred_collector_slots_evicted").increment(count as u64);
         }
         count
     }

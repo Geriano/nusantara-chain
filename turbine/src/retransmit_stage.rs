@@ -63,7 +63,7 @@ impl RetransmitStage {
                             leader = ?leader,
                             "dropping shred from unknown leader"
                         );
-                        metrics::counter!("turbine_shreds_unknown_leader").increment(1);
+                        metrics::counter!("nusantara_turbine_shreds_unknown_leader").increment(1);
                         continue;
                     };
 
@@ -74,7 +74,7 @@ impl RetransmitStage {
                             leader = ?leader,
                             "dropping shred with invalid signature"
                         );
-                        metrics::counter!("turbine_invalid_shred_signatures").increment(1);
+                        metrics::counter!("nusantara_turbine_invalid_shred_signatures").increment(1);
                         continue;
                     }
 
@@ -105,7 +105,7 @@ impl RetransmitStage {
                         }
                     }
 
-                    metrics::counter!("turbine_retransmit_total").increment(1);
+                    metrics::counter!("nusantara_turbine_retransmit_total").increment(1);
                 }
                 _ = shutdown.changed() => {
                     break;

@@ -56,7 +56,7 @@ impl Storage {
         let batch = self.prepare_index_updates(address, old_account, new_account);
         if !batch.is_empty() {
             self.write(&batch)?;
-            metrics::counter!("storage_owner_index_updates").increment(1);
+            metrics::counter!("nusantara_storage_owner_index_updates").increment(1);
         }
         Ok(())
     }
@@ -96,7 +96,7 @@ impl Storage {
         batch.delete(CF_OWNER_INDEX, key.to_vec());
         batch.delete(CF_PROGRAM_INDEX, key.to_vec());
         self.write(&batch)?;
-        metrics::counter!("storage_owner_index_removals").increment(1);
+        metrics::counter!("nusantara_storage_owner_index_removals").increment(1);
         Ok(())
     }
 

@@ -15,7 +15,7 @@ use crate::types::{BlockhashResponse, SlotResponse};
     )
 )]
 pub async fn get_slot(State(state): State<Arc<RpcState>>) -> Result<Json<SlotResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "slot").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "slot").increment(1);
 
     let slot = state.bank.current_slot();
     let latest_stored_slot = state.storage.get_latest_slot()?;
@@ -38,7 +38,7 @@ pub async fn get_slot(State(state): State<Arc<RpcState>>) -> Result<Json<SlotRes
 pub async fn get_blockhash(
     State(state): State<Arc<RpcState>>,
 ) -> Result<Json<BlockhashResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "blockhash").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "blockhash").increment(1);
 
     let slot_hashes = state.bank.slot_hashes();
     let (slot, hash) = slot_hashes

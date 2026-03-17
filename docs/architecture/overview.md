@@ -195,7 +195,7 @@ flowchart TB
 
 - `Block`, `BlockHeader`, `Transaction`, `Message`, `Instruction`, `Account`
 - Token constants: 1 NUSA = 1,000,000,000 lamports
-- Timing: 900 ms slots, 432,000 slots per epoch
+- Timing: 400 ms slots, 432,000 slots per epoch
 - Fee: 5,000 lamports per signature
 - Program IDs derived as `LazyLock<Hash>` from hashed string seeds
 - Build-time config via `config.toml` + `build.rs`

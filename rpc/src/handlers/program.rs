@@ -24,7 +24,7 @@ pub async fn get_program(
     State(state): State<Arc<RpcState>>,
     Path(address): Path<String>,
 ) -> Result<Json<ProgramResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "program").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "program").increment(1);
 
     let hash = Hash::from_base64(&address)
         .map_err(|e| RpcError::BadRequest(format!("invalid address: {e}")))?;

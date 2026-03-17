@@ -195,7 +195,7 @@ fn handle_send_transaction(
         .insert(tx)
         .map_err(|e| (INTERNAL_ERROR, format!("mempool rejected transaction: {e}")))?;
 
-    metrics::counter!("rpc_jsonrpc_transactions_submitted").increment(1);
+    metrics::counter!("nusantara_rpc_jsonrpc_transactions_submitted").increment(1);
 
     Ok(serde_json::json!(signature))
 }
@@ -208,11 +208,31 @@ fn handle_get_transaction(
     let tx_hash =
         Hash::from_base64(&hash_str).map_err(|e| (INVALID_PARAMS, format!("invalid hash: {e}")))?;
 
-    let meta = state
+    let meta = match state
         .storage
         .get_transaction_status(&tx_hash)
         .map_err(|e| (INTERNAL_ERROR, e.to_string()))?
-        .ok_or_else(|| (INVALID_PARAMS, format!("transaction not found: {hash_str}")))?;
+    {
+        Some(m) => m,
+        None => {
+            // Check mempool for "received" status
+            if state.mempool.contains(&tx_hash) {
+                return Ok(serde_json::json!({
+                    "signature": hash_str,
+                    "slot": 0,
+                    "status": "received",
+                    "fee": 0,
+                    "pre_balances": [],
+                    "post_balances": [],
+                    "compute_units_consumed": 0,
+                }));
+            }
+            return Err((
+                INVALID_PARAMS,
+                format!("transaction not found: {hash_str}"),
+            ));
+        }
+    };
 
     let status_str = match &meta.status {
         TransactionStatus::Success => "success".to_string(),
@@ -448,7 +468,7 @@ pub async fn handle_jsonrpc(
     State(state): State<Arc<RpcState>>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    metrics::counter!("rpc_jsonrpc_requests").increment(1);
+    metrics::counter!("nusantara_rpc_jsonrpc_requests").increment(1);
 
     if let Some(arr) = body.as_array() {
         // Batch request
@@ -473,8 +493,8 @@ pub async fn handle_jsonrpc(
             responses.push(resp);
         }
 
-        metrics::counter!("rpc_jsonrpc_batch_requests").increment(1);
-        metrics::histogram!("rpc_jsonrpc_batch_size").record(responses.len() as f64);
+        metrics::counter!("nusantara_rpc_jsonrpc_batch_requests").increment(1);
+        metrics::histogram!("nusantara_rpc_jsonrpc_batch_size").record(responses.len() as f64);
 
         (
             StatusCode::OK,

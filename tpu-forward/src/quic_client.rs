@@ -62,7 +62,7 @@ impl TpuQuicClient {
             .finish()
             .map_err(|e| TpuError::QuicStream(e.to_string()))?;
 
-        metrics::counter!("tpu_forward_messages_sent_total").increment(1);
+        metrics::counter!("nusantara_tpu_forward_messages_sent_total").increment(1);
         Ok(())
     }
 

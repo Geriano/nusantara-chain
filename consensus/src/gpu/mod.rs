@@ -68,7 +68,7 @@ impl GpuPohVerifier {
             adapter = adapter.get_info().name,
             "GPU PoH verifier initialized"
         );
-        metrics::counter!("gpu_verifier_initialized_total").increment(1);
+        metrics::counter!("nusantara_gpu_verifier_initialized_total").increment(1);
 
         Ok(Some(Self {
             device,
@@ -186,7 +186,7 @@ impl GpuPohVerifier {
         let results: &[u32] = bytemuck::cast_slice(&data);
         let bool_results: Vec<bool> = results.iter().map(|&r| r == 1).collect();
 
-        metrics::counter!("gpu_poh_entries_verified_total").increment(entries.len() as u64);
+        metrics::counter!("nusantara_gpu_poh_entries_verified_total").increment(entries.len() as u64);
 
         Ok(bool_results)
     }

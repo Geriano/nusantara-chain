@@ -17,7 +17,7 @@ use crate::types::EpochInfoResponse;
 pub async fn get_epoch_info(
     State(state): State<Arc<RpcState>>,
 ) -> Result<Json<EpochInfoResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "epoch_info").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "epoch_info").increment(1);
 
     let clock = state.bank.clock();
     let (epoch, slot_index) = state.epoch_schedule.get_epoch_and_slot_index(clock.slot);

@@ -187,7 +187,7 @@ async fn recv_loop(
                     Ok((len, src)) => {
                         // Rate limit check before processing
                         if !rate_limiter.check(src.ip()) {
-                            metrics::counter!("gossip_rate_limited_total").increment(1);
+                            metrics::counter!("nusantara_gossip_rate_limited_total").increment(1);
                             continue;
                         }
 
@@ -215,14 +215,14 @@ async fn handle_message(
     src: SocketAddr,
 ) -> Result<(), String> {
     let msg = GossipMessage::deserialize_from_bytes(data)?;
-    metrics::counter!("gossip_messages_received_total").increment(1);
+    metrics::counter!("nusantara_gossip_messages_received_total").increment(1);
 
     match msg {
         GossipMessage::PushMessage(push) => {
             for value in &push.values {
                 cluster_info.insert_verified_crds_value(value.clone());
             }
-            metrics::counter!("gossip_push_received_total").increment(1);
+            metrics::counter!("nusantara_gossip_push_received_total").increment(1);
         }
         GossipMessage::PullRequest(req) => {
             // Insert the requester's self-value (ContactInfo — self-verifiable)
@@ -239,13 +239,13 @@ async fn handle_message(
                     let _ = socket.send_to(&bytes, src).await;
                 }
             }
-            metrics::counter!("gossip_pull_requests_received_total").increment(1);
+            metrics::counter!("nusantara_gossip_pull_requests_received_total").increment(1);
         }
         GossipMessage::PullResponse(resp) => {
             cluster_info
                 .pull()
                 .process_pull_response(cluster_info.crds(), &resp);
-            metrics::counter!("gossip_pull_responses_received_total").increment(1);
+            metrics::counter!("nusantara_gossip_pull_responses_received_total").increment(1);
         }
         GossipMessage::PruneMessage(prune) => {
             // Verify prune message signature
@@ -257,12 +257,12 @@ async fn handle_message(
                     &prune.wallclock.to_le_bytes(),
                 ]);
                 if prune.signature.verify(&pubkey, sign_data.as_bytes()).is_err() {
-                    metrics::counter!("gossip_prune_invalid_signature_total").increment(1);
+                    metrics::counter!("nusantara_gossip_prune_invalid_signature_total").increment(1);
                     return Ok(());
                 }
             } else {
                 // Unknown peer — reject prune
-                metrics::counter!("gossip_prune_invalid_signature_total").increment(1);
+                metrics::counter!("nusantara_gossip_prune_invalid_signature_total").increment(1);
                 return Ok(());
             }
             cluster_info
@@ -274,7 +274,7 @@ async fn handle_message(
             if let Some(pubkey) = cluster_info.get_pubkey(&ping.from)
                 && !crate::ping_pong::PingCache::verify_ping(&ping, &pubkey)
             {
-                metrics::counter!("gossip_ping_invalid_signature_total").increment(1);
+                metrics::counter!("nusantara_gossip_ping_invalid_signature_total").increment(1);
                 return Ok(());
             }
             // Respond with pong (accept from unknown peers for bootstrapping)
@@ -293,10 +293,10 @@ async fn handle_message(
                 if cluster_info.ping_cache().verify_pong(&pong, &pubkey) {
                     cluster_info.ping_cache().mark_verified(pong.from);
                 } else {
-                    metrics::counter!("gossip_pong_verification_failed_total").increment(1);
+                    metrics::counter!("nusantara_gossip_pong_verification_failed_total").increment(1);
                 }
             } else {
-                metrics::counter!("gossip_pong_verification_failed_total").increment(1);
+                metrics::counter!("nusantara_gossip_pong_verification_failed_total").increment(1);
             }
         }
     }
@@ -377,7 +377,7 @@ async fn pull_loop(
                 let msg = GossipMessage::PullRequest(req);
                 if let Ok(bytes) = msg.serialize_to_bytes() {
                     let _ = socket.send_to(&bytes, addr).await;
-                    metrics::counter!("gossip_pull_requests_sent_total").increment(1);
+                    metrics::counter!("nusantara_gossip_pull_requests_sent_total").increment(1);
                 }
             }
             _ = shutdown.changed() => {

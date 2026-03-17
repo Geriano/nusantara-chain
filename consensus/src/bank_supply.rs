@@ -17,7 +17,7 @@ impl ConsensusBank {
     #[instrument(skip(self), level = "debug")]
     pub fn set_total_supply(&self, supply: u64) {
         *self.total_supply.write() = supply;
-        metrics::gauge!("bank_total_supply").set(supply as f64);
+        metrics::gauge!("nusantara_bank_total_supply").set(supply as f64);
     }
 
     /// Deduct burned fees from total supply.

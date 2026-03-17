@@ -133,8 +133,8 @@ mod tests {
     fn due_epoch_exempt() {
         let rent = Rent::default();
         let min = rent.minimum_balance(100);
-        // 432_000 slots * 900ms = 388_800_000 ms per epoch
-        let ms_per_epoch = 432_000u64 * 900;
+        // 432_000 slots * 400ms = 172_800_000 ms per epoch
+        let ms_per_epoch = 432_000u64 * 400;
         let ms_per_year = 31_536_000_000u64;
         assert_eq!(
             rent.due_epoch(min, 100, ms_per_epoch, ms_per_year),
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn due_epoch_paying() {
         let rent = Rent::default();
-        let ms_per_epoch = 432_000u64 * 900;
+        let ms_per_epoch = 432_000u64 * 400;
         let ms_per_year = 31_536_000_000u64;
         let due = rent.due_epoch(0, 100, ms_per_epoch, ms_per_year);
         assert!(matches!(due, RentDue::Paying(amount) if amount > 0));
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn due_epoch_matches_due_approximately() {
         let rent = Rent::default();
-        let ms_per_epoch = 432_000u64 * 900;
+        let ms_per_epoch = 432_000u64 * 400;
         let ms_per_year = 31_536_000_000u64;
         let years_per_epoch = ms_per_epoch as f64 / ms_per_year as f64;
 

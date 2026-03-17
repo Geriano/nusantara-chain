@@ -303,6 +303,26 @@ impl ValidatorNode {
             tracing::debug!(error = %e, "pubsub BlockNotification send failed (no subscribers)");
         }
 
+        // Publish SignatureNotification for each transaction in the block
+        for tx in &block.transactions {
+            let tx_hash = tx.hash();
+            let sig_b64 = tx_hash.to_base64();
+            let status_str = match self.storage.get_transaction_status(&tx_hash) {
+                Ok(Some(meta)) => match &meta.status {
+                    nusantara_storage::TransactionStatus::Success => "success".to_string(),
+                    nusantara_storage::TransactionStatus::Failed(msg) => {
+                        format!("failed: {msg}")
+                    }
+                },
+                _ => "success".to_string(),
+            };
+            let _ = self.pubsub_tx.send(PubsubEvent::SignatureNotification {
+                signature: sig_b64,
+                slot: self.current_slot,
+                status: status_str,
+            });
+        }
+
         metrics::counter!("nusantara_leader_slots").increment(1);
         info!(
             slot = self.current_slot,

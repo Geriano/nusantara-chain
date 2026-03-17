@@ -223,7 +223,7 @@ All commands support `--json` for machine-readable output:
 | `--enable-faucet` | false | Enable the airdrop endpoint |
 | `--max-ledger-slots` | `256` | Slots to retain in storage (0 = retain all) |
 | `--snapshot-interval` | `0` | Automatic snapshot interval in slots (0 = disabled) |
-| `--leader-timeout-ms` | `1800` | Timeout waiting for a block before skipping the slot |
+| `--leader-timeout-ms` | `800` | Timeout waiting for a block before skipping the slot |
 | `--entrypoints` | (none) | Peer gossip endpoints for cluster discovery |
 | `--public-host` | (none) | External hostname for Docker/Kubernetes environments |
 | `--shred-version` | `1` | Network compatibility version |

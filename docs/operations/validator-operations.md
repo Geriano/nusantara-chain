@@ -61,7 +61,7 @@ loop {
 ```
 
 - **Leader timeout**: If the expected leader does not produce a block within
-  `leader_timeout_ms` (default 1800ms), the slot is skipped.
+  `leader_timeout_ms` (default 800ms), the slot is skipped.
 - **Epoch boundary**: At the first slot of each epoch (every 432,000 slots), the leader
   schedule for the next epoch is computed from stake weights, and staking rewards are
   distributed.

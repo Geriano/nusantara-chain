@@ -67,7 +67,7 @@ impl CrdsGossipPull {
 
             let value_size = estimate_crds_value_size(&v);
             if total_size + value_size > MAX_PULL_RESPONSE_SIZE {
-                metrics::counter!("gossip_pull_response_truncated_total").increment(1);
+                metrics::counter!("nusantara_gossip_pull_response_truncated_total").increment(1);
                 break;
             }
             if response_values.len() >= MAX_PULL_RESPONSE_VALUES as usize {
@@ -102,13 +102,13 @@ impl CrdsGossipPull {
             match &pubkey {
                 Some(pk) => {
                     if !value.verify(pk) {
-                        metrics::counter!("gossip_pull_invalid_signature_total").increment(1);
+                        metrics::counter!("nusantara_gossip_pull_invalid_signature_total").increment(1);
                         continue;
                     }
                 }
                 None => {
                     // Non-ContactInfo from unknown peer — reject
-                    metrics::counter!("gossip_unverifiable_value_dropped_total").increment(1);
+                    metrics::counter!("nusantara_gossip_unverifiable_value_dropped_total").increment(1);
                     continue;
                 }
             }
@@ -118,7 +118,7 @@ impl CrdsGossipPull {
             }
         }
         if inserted > 0 {
-            metrics::counter!("gossip_pull_values_received_total").increment(inserted as u64);
+            metrics::counter!("nusantara_gossip_pull_values_received_total").increment(inserted as u64);
         }
         inserted
     }

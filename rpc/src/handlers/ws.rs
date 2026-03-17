@@ -8,6 +8,7 @@
 //!
 //! Events are delivered as JSON objects with a `"type"` discriminator field.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
@@ -24,12 +25,13 @@ use crate::server::{PubsubEvent, RpcState};
 struct Subscriptions {
     slot: bool,
     block: bool,
+    signatures: HashSet<String>,
 }
 
 impl Subscriptions {
     /// Returns `true` if at least one subscription is active.
     fn has_any(&self) -> bool {
-        self.slot || self.block
+        self.slot || self.block || !self.signatures.is_empty()
     }
 
     /// Returns `true` if this event matches an active subscription.
@@ -37,14 +39,25 @@ impl Subscriptions {
         match event {
             PubsubEvent::SlotUpdate { .. } => self.slot,
             PubsubEvent::BlockNotification { .. } => self.block,
+            PubsubEvent::SignatureNotification { signature, .. } => {
+                self.signatures.contains(signature)
+            }
         }
     }
+}
+
+/// Optional parameters for subscription requests (e.g. signatureSubscribe).
+#[derive(Debug, Deserialize, Default)]
+struct SignatureParams {
+    signature: String,
 }
 
 /// Inbound message from the WebSocket client.
 #[derive(Debug, Deserialize)]
 struct ClientRequest {
     method: String,
+    #[serde(default)]
+    params: Option<SignatureParams>,
 }
 
 /// Axum handler that upgrades an HTTP request to a WebSocket connection.
@@ -56,7 +69,7 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<RpcState>>,
 ) -> impl IntoResponse {
-    metrics::counter!("rpc_ws_upgrades").increment(1);
+    metrics::counter!("nusantara_rpc_ws_upgrades").increment(1);
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -74,7 +87,7 @@ pub async fn ws_handler(
 /// - The loop exits when the client disconnects or sends a Close frame.
 #[instrument(skip_all)]
 async fn handle_socket(mut socket: WebSocket, state: Arc<RpcState>) {
-    metrics::gauge!("rpc_ws_active_connections").increment(1.0);
+    metrics::gauge!("nusantara_rpc_ws_active_connections").increment(1.0);
     debug!("WebSocket client connected");
 
     let mut event_rx: broadcast::Receiver<PubsubEvent> = state.pubsub_tx.subscribe();
@@ -111,6 +124,14 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<RpcState>) {
             event = event_rx.recv() => {
                 match event {
                     Ok(ev) if subs.matches(&ev) => {
+                        // Auto-unsubscribe after delivering a SignatureNotification
+                        // (one-shot subscription pattern to prevent memory leaks)
+                        let auto_unsub_sig = if let PubsubEvent::SignatureNotification { ref signature, .. } = ev {
+                            Some(signature.clone())
+                        } else {
+                            None
+                        };
+
                         // Serialize and send only if the client is subscribed
                         match serde_json::to_string(&ev) {
                             Ok(json) => {
@@ -118,7 +139,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<RpcState>) {
                                     debug!("WebSocket send failed, closing");
                                     break;
                                 }
-                                metrics::counter!("rpc_ws_events_sent").increment(1);
+                                metrics::counter!("nusantara_rpc_ws_events_sent").increment(1);
+
+                                // Remove the signature after successful delivery
+                                if let Some(sig) = auto_unsub_sig {
+                                    subs.signatures.remove(&sig);
+                                }
                             }
                             Err(e) => {
                                 warn!(error = %e, "failed to serialize pubsub event");
@@ -130,7 +156,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<RpcState>) {
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!(missed = n, "WebSocket subscriber lagged, events dropped");
-                        metrics::counter!("rpc_ws_events_lagged").increment(n);
+                        metrics::counter!("nusantara_rpc_ws_events_lagged").increment(n);
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         debug!("pubsub channel closed, terminating WebSocket");
@@ -141,7 +167,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<RpcState>) {
         }
     }
 
-    metrics::gauge!("rpc_ws_active_connections").decrement(1.0);
+    metrics::gauge!("nusantara_rpc_ws_active_connections").decrement(1.0);
     debug!("WebSocket session ended");
 }
 
@@ -190,6 +216,36 @@ async fn handle_client_message(text: &str, subs: &mut Subscriptions, socket: &mu
                 true,
             )
         }
+        "signatureSubscribe" => {
+            if let Some(params) = &req.params {
+                if params.signature.is_empty() {
+                    (
+                        serde_json::json!({"error": "missing signature parameter"}),
+                        false,
+                    )
+                } else {
+                    subs.signatures.insert(params.signature.clone());
+                    (
+                        serde_json::json!({"result": "subscribed", "subscription": "signature"}),
+                        true,
+                    )
+                }
+            } else {
+                (
+                    serde_json::json!({"error": "missing params.signature for signatureSubscribe"}),
+                    false,
+                )
+            }
+        }
+        "signatureUnsubscribe" => {
+            if let Some(params) = &req.params {
+                subs.signatures.remove(&params.signature);
+            }
+            (
+                serde_json::json!({"result": "unsubscribed", "subscription": "signature"}),
+                true,
+            )
+        }
         _ => (
             serde_json::json!({"error": format!("unknown method: {}", req.method)}),
             false,
@@ -197,7 +253,7 @@ async fn handle_client_message(text: &str, subs: &mut Subscriptions, socket: &mu
     };
 
     if recognized {
-        metrics::counter!("rpc_ws_subscriptions", "method" => req.method.clone()).increment(1);
+        metrics::counter!("nusantara_rpc_ws_subscriptions", "method" => req.method.clone()).increment(1);
         debug!(method = %req.method, active = subs.has_any(), "subscription updated");
     }
 
@@ -222,6 +278,11 @@ mod tests {
             block_hash: "abc".to_string(),
             tx_count: 0,
         }));
+        assert!(!subs.matches(&PubsubEvent::SignatureNotification {
+            signature: "test_sig".to_string(),
+            slot: 1,
+            status: "success".to_string(),
+        }));
     }
 
     #[test]
@@ -229,6 +290,7 @@ mod tests {
         let subs = Subscriptions {
             slot: true,
             block: false,
+            ..Default::default()
         };
         assert!(subs.has_any());
         assert!(subs.matches(&PubsubEvent::SlotUpdate {
@@ -248,6 +310,7 @@ mod tests {
         let subs = Subscriptions {
             slot: false,
             block: true,
+            ..Default::default()
         };
         assert!(subs.has_any());
         assert!(!subs.matches(&PubsubEvent::SlotUpdate {
@@ -267,6 +330,7 @@ mod tests {
         let subs = Subscriptions {
             slot: true,
             block: true,
+            ..Default::default()
         };
         assert!(subs.has_any());
         assert!(subs.matches(&PubsubEvent::SlotUpdate {
@@ -310,10 +374,56 @@ mod tests {
     }
 
     #[test]
+    fn subscriptions_signature_match() {
+        let mut subs = Subscriptions::default();
+        subs.signatures.insert("sig_abc".to_string());
+
+        assert!(subs.has_any());
+        assert!(subs.matches(&PubsubEvent::SignatureNotification {
+            signature: "sig_abc".to_string(),
+            slot: 5,
+            status: "success".to_string(),
+        }));
+        assert!(!subs.matches(&PubsubEvent::SignatureNotification {
+            signature: "sig_other".to_string(),
+            slot: 5,
+            status: "success".to_string(),
+        }));
+        // Slot/block should not match
+        assert!(!subs.matches(&PubsubEvent::SlotUpdate {
+            slot: 1,
+            parent: 0,
+            root: 0,
+        }));
+    }
+
+    #[test]
+    fn pubsub_event_signature_serializes_with_type_tag() {
+        let event = PubsubEvent::SignatureNotification {
+            signature: "test_sig".to_string(),
+            slot: 77,
+            status: "success".to_string(),
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "SignatureNotification");
+        assert_eq!(json["signature"], "test_sig");
+        assert_eq!(json["slot"], 77);
+        assert_eq!(json["status"], "success");
+    }
+
+    #[test]
     fn client_request_deserializes() {
         let raw = r#"{"method": "slotSubscribe"}"#;
         let req: ClientRequest = serde_json::from_str(raw).expect("parse");
         assert_eq!(req.method, "slotSubscribe");
+    }
+
+    #[test]
+    fn client_request_with_params_deserializes() {
+        let raw = r#"{"method": "signatureSubscribe", "params": {"signature": "abc123"}}"#;
+        let req: ClientRequest = serde_json::from_str(raw).expect("parse");
+        assert_eq!(req.method, "signatureSubscribe");
+        assert_eq!(req.params.as_ref().unwrap().signature, "abc123");
     }
 
     #[test]

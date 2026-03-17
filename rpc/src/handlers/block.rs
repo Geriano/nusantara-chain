@@ -22,7 +22,7 @@ pub async fn get_block(
     State(state): State<Arc<RpcState>>,
     Path(slot): Path<u64>,
 ) -> Result<Json<BlockResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "block").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "block").increment(1);
 
     let header = state
         .storage

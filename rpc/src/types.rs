@@ -66,6 +66,7 @@ pub struct SendTransactionRequest {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct SendTransactionResponse {
     pub signature: String,
+    pub status: String,
 }
 
 // ── Slot ──

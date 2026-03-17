@@ -65,27 +65,27 @@ impl PingCache {
         let pending_token = match self.pending.remove(&pong.from) {
             Some((_, (token, sent_at))) => {
                 if sent_at.elapsed() >= self.ttl {
-                    metrics::counter!("gossip_pong_expired_total").increment(1);
+                    metrics::counter!("nusantara_gossip_pong_expired_total").increment(1);
                     return false;
                 }
                 token
             }
             None => {
-                metrics::counter!("gossip_pong_unsolicited_total").increment(1);
+                metrics::counter!("nusantara_gossip_pong_unsolicited_total").increment(1);
                 return false;
             }
         };
 
         let expected_hash = crypto_hash(pending_token.as_bytes());
         if pong.token_hash != expected_hash {
-            metrics::counter!("gossip_pong_verification_failed_total").increment(1);
+            metrics::counter!("nusantara_gossip_pong_verification_failed_total").increment(1);
             return false;
         }
 
         // Verify signature: pong signs hashv(&[b"pong", token_hash])
         let sign_data = hashv(&[b"pong", pong.token_hash.as_bytes()]);
         if pong.signature.verify(pubkey, sign_data.as_bytes()).is_err() {
-            metrics::counter!("gossip_pong_verification_failed_total").increment(1);
+            metrics::counter!("nusantara_gossip_pong_verification_failed_total").increment(1);
             return false;
         }
 
@@ -95,7 +95,7 @@ impl PingCache {
     /// Verify a ping message signature against the sender's public key.
     pub fn verify_ping(ping: &PingMessage, pubkey: &PublicKey) -> bool {
         if ping.signature.verify(pubkey, ping.token.as_bytes()).is_err() {
-            metrics::counter!("gossip_ping_invalid_signature_total").increment(1);
+            metrics::counter!("nusantara_gossip_ping_invalid_signature_total").increment(1);
             return false;
         }
         true

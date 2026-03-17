@@ -17,7 +17,7 @@ use crate::types::{ValidatorEntry, ValidatorsResponse};
 pub async fn get_validators(
     State(state): State<Arc<RpcState>>,
 ) -> Result<Json<ValidatorsResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "validators").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "validators").increment(1);
 
     let vote_states = state.bank.get_all_vote_states();
     let stake_distribution = state.bank.get_stake_distribution();

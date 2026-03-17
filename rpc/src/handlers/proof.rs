@@ -55,7 +55,7 @@ pub async fn get_account_proof(
     State(state): State<Arc<RpcState>>,
     Path(address): Path<String>,
 ) -> Result<Json<AccountProofResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "account_proof").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "account_proof").increment(1);
 
     let hash = Hash::from_base64(&address)
         .map_err(|e| RpcError::BadRequest(format!("invalid address: {e}")))?;

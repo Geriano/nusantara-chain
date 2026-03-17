@@ -218,7 +218,7 @@ impl StateTree {
             account_count = leaves.len(),
             "state tree initialized from storage"
         );
-        metrics::gauge!("state_tree_leaf_count").set(leaves.len() as f64);
+        metrics::gauge!("nusantara_state_tree_leaf_count").set(leaves.len() as f64);
 
         Ok(Self {
             leaves,

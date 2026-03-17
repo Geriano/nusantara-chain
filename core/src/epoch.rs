@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn default_slot_duration() {
-        assert_eq!(DEFAULT_SLOT_DURATION_MS, 900);
+        assert_eq!(DEFAULT_SLOT_DURATION_MS, 400);
     }
 
     #[test]

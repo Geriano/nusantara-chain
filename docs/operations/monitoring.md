@@ -91,15 +91,15 @@ Metrics from the Axum-based RPC server.
 | Metric | Type | Description |
 |--------|------|-------------|
 | `nusantara_rpc_server_started` | counter | Number of times the RPC server has started |
-| `rpc_jsonrpc_requests` | counter | Total JSON-RPC requests served |
-| `rpc_jsonrpc_transactions_submitted` | counter | Transactions submitted via RPC |
-| `rpc_jsonrpc_batch_requests` | counter | Batch RPC requests received |
-| `rpc_jsonrpc_batch_size` | histogram | Number of sub-requests per batch |
-| `rpc_ws_upgrades` | counter | WebSocket upgrade requests |
-| `rpc_ws_active_connections` | gauge | Currently active WebSocket connections |
-| `rpc_ws_events_sent` | counter | Events delivered to WebSocket subscribers |
-| `rpc_ws_events_lagged` | counter | Events dropped due to slow subscribers |
-| `rpc_ws_subscriptions` | counter | Total WebSocket subscription requests |
+| `nusantara_rpc_jsonrpc_requests` | counter | Total JSON-RPC requests served |
+| `nusantara_rpc_jsonrpc_transactions_submitted` | counter | Transactions submitted via RPC |
+| `nusantara_rpc_jsonrpc_batch_requests` | counter | Batch RPC requests received |
+| `nusantara_rpc_jsonrpc_batch_size` | histogram | Number of sub-requests per batch |
+| `nusantara_rpc_ws_upgrades` | counter | WebSocket upgrade requests |
+| `nusantara_rpc_ws_active_connections` | gauge | Currently active WebSocket connections |
+| `nusantara_rpc_ws_events_sent` | counter | Events delivered to WebSocket subscribers |
+| `nusantara_rpc_ws_events_lagged` | counter | Events dropped due to slow subscribers |
+| `nusantara_rpc_ws_subscriptions` | counter | Total WebSocket subscription requests |
 
 ## Grafana Setup
 
@@ -190,7 +190,7 @@ histogram_quantile(0.99, rate(nusantara_block_time_ms_bucket[5m])) > 800
 Fires when WebSocket events are being dropped due to slow subscribers.
 
 ```promql
-rate(rpc_ws_events_lagged[5m]) > 0
+rate(nusantara_rpc_ws_events_lagged[5m]) > 0
 ```
 
 **Severity**: P2 -- clients are missing real-time updates.
@@ -250,13 +250,13 @@ rate(nusantara_gossip_push_messages[5m]) + rate(nusantara_gossip_pull_requests[5
 ### RPC Request Rate by Validator
 
 ```promql
-rate(rpc_jsonrpc_requests[5m])
+rate(nusantara_rpc_jsonrpc_requests[5m])
 ```
 
 ### WebSocket Connection Churn
 
 ```promql
-rate(rpc_ws_upgrades[5m])
+rate(nusantara_rpc_ws_upgrades[5m])
 ```
 
 ## Operational Procedures

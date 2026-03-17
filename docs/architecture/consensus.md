@@ -57,7 +57,7 @@ to communicate about timing.
 | `ticks_per_slot` | 64 | Ticks per slot |
 | `target_tick_duration_us` | 14,062 | Target time per tick (14.062us) |
 | Total hashes per slot | 800,000 | 12,500 * 64 |
-| Slot duration | 900ms | Wall-clock target |
+| Slot duration | 400ms | Wall-clock target |
 
 ### Hash Chain
 
@@ -160,7 +160,7 @@ progressively more expensive.
    `confirmation_count` incremented by 1, doubling their lockout period.
 
 4. **Root advancement**: If the bottom vote reaches `MAX_LOCKOUT_HISTORY` (31)
-   confirmations, its lockout is 2^31 slots (~24+ years at 900ms slots). This
+   confirmations, its lockout is 2^31 slots (~27+ years at 400ms slots). This
    vote becomes the new **root** -- an irreversible finality point.
 
 ### Lockout Tower Visualization
@@ -469,7 +469,7 @@ if rate < terminal_rate:
     rate = terminal_rate
 ```
 
-At 900ms slots and 432,000 slots/epoch (~4.5 days), there are approximately
+At 400ms slots and 432,000 slots/epoch (~2 days), there are approximately
 81 epochs per year. The per-epoch reward pool is:
 
 ```
@@ -734,30 +734,30 @@ taper_rate_bps = 1_500
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `poh_hash_iterations_total` | Counter | Total PoH hash iterations performed |
-| `poh_records_total` | Counter | Transaction hashes mixed into PoH |
-| `poh_ticks_total` | Counter | PoH ticks produced |
-| `poh_slots_produced_total` | Counter | PoH slots produced |
-| `gpu_verifier_initialized_total` | Counter | GPU verifier initialization events |
-| `gpu_poh_entries_verified_total` | Counter | PoH entries verified on GPU |
-| `tower_votes_processed_total` | Counter | Votes processed through Tower |
-| `tower_roots_advanced_total` | Counter | Root advancement events |
-| `fork_tree_node_count` | Gauge | Number of nodes in the fork tree |
-| `fork_tree_best_slot` | Gauge | Current best (heaviest) slot |
-| `fork_tree_root_slot` | Gauge | Current finalized root slot |
-| `commitment_highest_confirmed` | Gauge | Highest confirmed slot |
-| `commitment_highest_finalized` | Gauge | Highest finalized slot |
-| `replay_blocks_processed_total` | Counter | Blocks replayed by ReplayStage |
-| `replay_votes_processed_total` | Counter | Votes processed during replay |
-| `leader_schedule_computed_total` | Counter | Leader schedules computed |
-| `rewards_epochs_calculated_total` | Counter | Epoch reward calculations |
-| `rewards_total_distributed` | Gauge | Total rewards distributed (lamports) |
-| `slashing_double_votes_detected` | Counter | Double-vote equivocations detected |
-| `slashing_penalties_applied` | Counter | Slash penalties applied |
-| `slashing_total_slashed_lamports` | Counter | Total lamports slashed |
-| `bank_total_active_stake` | Gauge | Total active stake in current epoch |
-| `bank_epoch_stake_validators` | Gauge | Number of validators with active stake |
-| `bank_total_supply` | Gauge | Total token supply |
-| `bank_current_slot` | Gauge | Current bank slot |
-| `bank_slots_frozen_total` | Counter | Slots frozen in consensus bank |
-| `state_tree_leaf_count` | Gauge | Number of accounts in state Merkle tree |
+| `nusantara_poh_hash_iterations_total` | Counter | Total PoH hash iterations performed |
+| `nusantara_poh_records_total` | Counter | Transaction hashes mixed into PoH |
+| `nusantara_poh_ticks_total` | Counter | PoH ticks produced |
+| `nusantara_poh_slots_produced_total` | Counter | PoH slots produced |
+| `nusantara_gpu_verifier_initialized_total` | Counter | GPU verifier initialization events |
+| `nusantara_gpu_poh_entries_verified_total` | Counter | PoH entries verified on GPU |
+| `nusantara_tower_votes_processed_total` | Counter | Votes processed through Tower |
+| `nusantara_tower_roots_advanced_total` | Counter | Root advancement events |
+| `nusantara_fork_tree_node_count` | Gauge | Number of nodes in the fork tree |
+| `nusantara_fork_tree_best_slot` | Gauge | Current best (heaviest) slot |
+| `nusantara_fork_tree_root_slot` | Gauge | Current finalized root slot |
+| `nusantara_commitment_highest_confirmed` | Gauge | Highest confirmed slot |
+| `nusantara_commitment_highest_finalized` | Gauge | Highest finalized slot |
+| `nusantara_replay_blocks_processed_total` | Counter | Blocks replayed by ReplayStage |
+| `nusantara_replay_votes_processed_total` | Counter | Votes processed during replay |
+| `nusantara_leader_schedule_computed_total` | Counter | Leader schedules computed |
+| `nusantara_rewards_epochs_calculated_total` | Counter | Epoch reward calculations |
+| `nusantara_rewards_total_distributed` | Gauge | Total rewards distributed (lamports) |
+| `nusantara_slashing_double_votes_detected` | Counter | Double-vote equivocations detected |
+| `nusantara_slashing_penalties_applied` | Counter | Slash penalties applied |
+| `nusantara_slashing_total_slashed_lamports` | Counter | Total lamports slashed |
+| `nusantara_bank_total_active_stake` | Gauge | Total active stake in current epoch |
+| `nusantara_bank_epoch_stake_validators` | Gauge | Number of validators with active stake |
+| `nusantara_bank_total_supply` | Gauge | Total token supply |
+| `nusantara_bank_current_slot` | Gauge | Current bank slot |
+| `nusantara_bank_slots_frozen_total` | Counter | Slots frozen in consensus bank |
+| `nusantara_state_tree_leaf_count` | Gauge | Number of accounts in state Merkle tree |

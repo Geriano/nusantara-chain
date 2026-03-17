@@ -25,7 +25,7 @@ pub async fn get_stake_account(
     State(state): State<Arc<RpcState>>,
     Path(address): Path<String>,
 ) -> Result<Json<StakeAccountResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "stake_account").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "stake_account").increment(1);
 
     let hash = Hash::from_base64(&address)
         .map_err(|e| RpcError::BadRequest(format!("invalid address: {e}")))?;

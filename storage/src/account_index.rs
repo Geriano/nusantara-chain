@@ -38,7 +38,7 @@ impl Storage {
 
         self.write(&batch)?;
         if !index_batch.is_empty() {
-            metrics::counter!("storage_owner_index_updates").increment(1);
+            metrics::counter!("nusantara_storage_owner_index_updates").increment(1);
         }
 
         Ok(())

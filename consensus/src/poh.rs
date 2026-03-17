@@ -51,7 +51,7 @@ impl PohRecorder {
             self.hash = hash(self.hash.as_bytes());
             self.num_hashes += 1;
         }
-        metrics::counter!("poh_hash_iterations_total").increment(count);
+        metrics::counter!("nusantara_poh_hash_iterations_total").increment(count);
     }
 
     /// Mix in a transaction hash: hash = sha3_512(hash || tx_hash).
@@ -59,7 +59,7 @@ impl PohRecorder {
     pub fn record(&mut self, tx_hash: &Hash) -> PohEntry {
         self.hash = hashv(&[self.hash.as_bytes(), tx_hash.as_bytes()]);
         self.num_hashes += 1;
-        metrics::counter!("poh_records_total").increment(1);
+        metrics::counter!("nusantara_poh_records_total").increment(1);
         PohEntry {
             num_hashes: self.num_hashes,
             hash: self.hash,
@@ -75,7 +75,7 @@ impl PohRecorder {
             hash: self.hash,
         };
         self.tick_count += 1;
-        metrics::counter!("poh_ticks_total").increment(1);
+        metrics::counter!("nusantara_poh_ticks_total").increment(1);
         Tick { entry, mixin: None }
     }
 
@@ -86,7 +86,7 @@ impl PohRecorder {
         for _ in 0..TICKS_PER_SLOT {
             ticks.push(self.tick());
         }
-        metrics::counter!("poh_slots_produced_total").increment(1);
+        metrics::counter!("nusantara_poh_slots_produced_total").increment(1);
         ticks
     }
 

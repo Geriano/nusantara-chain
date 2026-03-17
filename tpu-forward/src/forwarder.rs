@@ -89,20 +89,20 @@ impl TransactionForwarder {
                             return;
                         }
                     }
-                    metrics::counter!("tpu_local_forward_total").increment(1);
+                    metrics::counter!("nusantara_tpu_local_forward_total").increment(1);
                 } else {
                     // Forward to remote leader
                     if let Err(e) = self.client.send_batch(leader_addr, txs).await {
                         debug!(error = %e, "failed to forward batch to leader");
-                        metrics::counter!("tpu_forward_errors_total").increment(1);
+                        metrics::counter!("nusantara_tpu_forward_errors_total").increment(1);
                     } else {
-                        metrics::counter!("tpu_remote_forward_total").increment(1);
+                        metrics::counter!("nusantara_tpu_remote_forward_total").increment(1);
                     }
                 }
             }
             None => {
                 debug!("no leader available, dropping {} transactions", txs.len());
-                metrics::counter!("tpu_no_leader_drops_total").increment(txs.len() as u64);
+                metrics::counter!("nusantara_tpu_no_leader_drops_total").increment(txs.len() as u64);
             }
         }
     }

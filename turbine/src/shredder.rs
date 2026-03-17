@@ -101,7 +101,7 @@ impl Shredder {
             }
         }
 
-        metrics::counter!("turbine_shreds_created_total")
+        metrics::counter!("nusantara_turbine_shreds_created_total")
             .increment((data_shreds.len() + code_shreds.len()) as u64);
 
         Ok(ShredBatch {

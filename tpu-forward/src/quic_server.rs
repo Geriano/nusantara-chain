@@ -29,7 +29,7 @@ impl TpuQuicServer {
     }
 
     /// Run the QUIC server, accepting connections and forwarding valid transactions.
-    #[instrument(skip(self, tx_sender, shutdown), name = "tpu_quic_server")]
+    #[instrument(skip(self, tx_sender, shutdown), name = "nusantara_tpu_quic_server")]
     pub async fn run(
         self,
         tx_sender: mpsc::Sender<Transaction>,
@@ -64,7 +64,7 @@ impl TpuQuicServer {
                         Ok(permit) => permit,
                         Err(_) => {
                             self.rate_limiter.remove_connection(ip);
-                            metrics::counter!("tpu_connections_rejected_total").increment(1);
+                            metrics::counter!("nusantara_tpu_connections_rejected_total").increment(1);
                             debug!(%remote, "connection rejected (semaphore full)");
                             continue;
                         }
@@ -126,11 +126,11 @@ async fn handle_connection(
 
                             if let Err(e) = TxValidator::validate(&tx, raw_size) {
                                 debug!(%ip, error = %e, "invalid transaction");
-                                metrics::counter!("tpu_invalid_transactions_total").increment(1);
+                                metrics::counter!("nusantara_tpu_invalid_transactions_total").increment(1);
                                 continue;
                             }
 
-                            metrics::counter!("tpu_transactions_received_total").increment(1);
+                            metrics::counter!("nusantara_tpu_transactions_received_total").increment(1);
 
                             if tx_sender.send(tx).await.is_err() {
                                 warn!("tx channel closed");

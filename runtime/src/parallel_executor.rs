@@ -99,12 +99,12 @@ pub fn execute_slot_parallel(
 
     let result = committer.finalize(slot);
 
-    metrics::counter!("runtime_parallel_slot_transactions_total")
+    metrics::counter!("nusantara_runtime_parallel_slot_transactions_total")
         .increment(result.transactions_executed);
-    metrics::counter!("runtime_parallel_slot_fees_collected_total").increment(result.total_fees);
-    metrics::counter!("runtime_parallel_slot_compute_consumed")
+    metrics::counter!("nusantara_runtime_parallel_slot_fees_collected_total").increment(result.total_fees);
+    metrics::counter!("nusantara_runtime_parallel_slot_compute_consumed")
         .increment(result.total_compute_consumed);
-    metrics::counter!("runtime_parallel_batches_total").increment(batches.len() as u64);
+    metrics::counter!("nusantara_runtime_parallel_batches_total").increment(batches.len() as u64);
 
     Ok(result)
 }

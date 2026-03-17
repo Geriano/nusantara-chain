@@ -41,9 +41,9 @@ pub fn execute_slot(
 
     let result = committer.finalize(slot);
 
-    metrics::counter!("runtime_slot_transactions_total").increment(result.transactions_executed);
-    metrics::counter!("runtime_slot_fees_collected_total").increment(result.total_fees);
-    metrics::counter!("runtime_slot_compute_consumed").increment(result.total_compute_consumed);
+    metrics::counter!("nusantara_runtime_slot_transactions_total").increment(result.transactions_executed);
+    metrics::counter!("nusantara_runtime_slot_fees_collected_total").increment(result.total_fees);
+    metrics::counter!("nusantara_runtime_slot_compute_consumed").increment(result.total_compute_consumed);
 
     Ok(result)
 }

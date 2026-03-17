@@ -25,7 +25,7 @@ pub async fn get_vote_account(
     State(state): State<Arc<RpcState>>,
     Path(address): Path<String>,
 ) -> Result<Json<VoteAccountResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "vote_account").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "vote_account").increment(1);
 
     let hash = Hash::from_base64(&address)
         .map_err(|e| RpcError::BadRequest(format!("invalid address: {e}")))?;

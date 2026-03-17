@@ -16,7 +16,7 @@ use crate::types::HealthResponse;
     )
 )]
 pub async fn health(State(state): State<Arc<RpcState>>) -> Result<Json<HealthResponse>, RpcError> {
-    metrics::counter!("rpc_requests", "endpoint" => "health").increment(1);
+    metrics::counter!("nusantara_rpc_requests", "endpoint" => "health").increment(1);
 
     let current_slot = state.bank.current_slot();
     let root_slot = state.storage.get_latest_root()?.unwrap_or(0);

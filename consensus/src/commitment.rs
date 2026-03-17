@@ -76,7 +76,7 @@ impl CommitmentTracker {
                 if slot > self.highest_confirmed {
                     self.highest_confirmed = slot;
                 }
-                metrics::gauge!("commitment_highest_confirmed").set(self.highest_confirmed as f64);
+                metrics::gauge!("nusantara_commitment_highest_confirmed").set(self.highest_confirmed as f64);
             }
         }
 
@@ -91,7 +91,7 @@ impl CommitmentTracker {
         }
         if slot > self.highest_finalized {
             self.highest_finalized = slot;
-            metrics::gauge!("commitment_highest_finalized").set(self.highest_finalized as f64);
+            metrics::gauge!("nusantara_commitment_highest_finalized").set(self.highest_finalized as f64);
         }
     }
 
