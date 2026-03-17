@@ -1,11 +1,20 @@
-mod cli;
-mod error;
-mod slot_clock;
 mod block_producer;
 mod block_replayer;
+mod bootstrap;
+mod cli;
+mod constants;
+mod epoch;
+mod error;
+mod fork_manager;
+mod identity;
 mod node;
+mod replay;
+mod services;
+mod slot_clock;
+mod slot_loop;
 mod snapshot_fetcher;
 mod vote_tx;
+mod voting;
 
 use std::net::SocketAddr;
 
