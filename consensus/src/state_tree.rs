@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use nusantara_core::Account;
@@ -37,6 +38,8 @@ pub struct StateTree {
     /// Sorted by address for deterministic ordering.
     /// address -> leaf_hash
     leaves: BTreeMap<Hash, Hash>,
+    /// Cached root hash; invalidated on update/remove.
+    cached_root: Cell<Option<Hash>>,
 }
 
 /// Hash a leaf node with a domain separator to avoid second-preimage attacks.
@@ -70,6 +73,7 @@ impl StateTree {
     pub fn new() -> Self {
         Self {
             leaves: BTreeMap::new(),
+            cached_root: Cell::new(None),
         }
     }
 
@@ -93,23 +97,31 @@ impl StateTree {
             let leaf = account_leaf_hash(address, account);
             self.leaves.insert(*address, leaf);
         }
+        self.cached_root.set(None);
     }
 
     /// Remove an account from the tree.
     pub fn remove(&mut self, address: &Hash) {
         self.leaves.remove(address);
+        self.cached_root.set(None);
     }
 
     /// Compute the Merkle root of all current leaves.
     ///
     /// Returns `Hash::zero()` for an empty tree.
     pub fn root(&self) -> Hash {
+        if let Some(cached) = self.cached_root.get() {
+            return cached;
+        }
+
         if self.leaves.is_empty() {
             return Hash::zero();
         }
 
         let leaf_hashes: Vec<Hash> = self.leaves.values().copied().collect();
-        compute_root(&leaf_hashes)
+        let result = compute_root(&leaf_hashes);
+        self.cached_root.set(Some(result));
+        result
     }
 
     /// Generate a Merkle proof for a specific account address.
@@ -208,7 +220,10 @@ impl StateTree {
         );
         metrics::gauge!("state_tree_leaf_count").set(leaves.len() as f64);
 
-        Ok(Self { leaves })
+        Ok(Self {
+            leaves,
+            cached_root: Cell::new(None),
+        })
     }
 }
 

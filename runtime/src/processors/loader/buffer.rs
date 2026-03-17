@@ -1,3 +1,4 @@
+use nusantara_core::MAX_ACCOUNT_DATA_SIZE;
 use nusantara_core::program::LOADER_PROGRAM_ID;
 use nusantara_loader_program::state::LoaderState;
 
@@ -81,6 +82,14 @@ pub(super) fn process_write(
 
     let write_start = header_len + offset as usize;
     let write_end = write_start + data.len();
+
+    // Guard against unbounded allocation
+    if write_end as u64 > MAX_ACCOUNT_DATA_SIZE {
+        return Err(RuntimeError::AccountDataTooLarge {
+            size: write_end as u64,
+            limit: MAX_ACCOUNT_DATA_SIZE,
+        });
+    }
 
     // Extend data if needed
     if write_end > buffer.account.data.len() {

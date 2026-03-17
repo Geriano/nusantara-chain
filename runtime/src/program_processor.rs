@@ -5,6 +5,8 @@
 //! in `program_dispatch.rs` with a lookup table, making it trivial to add
 //! new native programs without editing the dispatch function.
 
+use std::collections::HashMap;
+
 use nusantara_crypto::Hash;
 use nusantara_vm::ProgramCache;
 
@@ -31,14 +33,14 @@ pub trait ProgramProcessor: Send + Sync {
 
 /// Registry of native program processors, keyed by program ID.
 pub struct ProcessorRegistry {
-    processors: Vec<Box<dyn ProgramProcessor>>,
+    processors: HashMap<Hash, Box<dyn ProgramProcessor>>,
 }
 
 impl ProcessorRegistry {
     /// Create a registry with all built-in native processors.
     pub fn new_with_defaults() -> Self {
         let mut registry = Self {
-            processors: Vec::new(),
+            processors: HashMap::new(),
         };
         registry.register(Box::new(SystemProcessor));
         registry.register(Box::new(StakeProcessor));
@@ -51,15 +53,12 @@ impl ProcessorRegistry {
 
     /// Register a new program processor.
     pub fn register(&mut self, processor: Box<dyn ProgramProcessor>) {
-        self.processors.push(processor);
+        self.processors.insert(*processor.program_id(), processor);
     }
 
-    /// Look up a processor by program ID.
+    /// Look up a processor by program ID (O(1) via HashMap).
     pub fn find(&self, program_id: &Hash) -> Option<&dyn ProgramProcessor> {
-        self.processors
-            .iter()
-            .find(|p| p.program_id() == program_id)
-            .map(|p| p.as_ref())
+        self.processors.get(program_id).map(|p| p.as_ref())
     }
 }
 

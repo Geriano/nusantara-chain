@@ -16,6 +16,7 @@ pub use crate::cost_schedule::SIGNATURE_VERIFY_COST;
 
 static REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(ProcessorRegistry::new_with_defaults);
 
+#[tracing::instrument(skip_all, fields(program_id = %program_id))]
 pub fn dispatch_instruction(
     program_id: &Hash,
     accounts: &[u8],

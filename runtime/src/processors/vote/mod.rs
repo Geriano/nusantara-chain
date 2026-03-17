@@ -12,6 +12,7 @@ mod initialize;
 mod vote_action;
 mod withdraw;
 
+#[tracing::instrument(skip_all, fields(program = "vote"))]
 pub fn process_vote(
     accounts: &[u8],
     data: &[u8],
@@ -48,9 +49,8 @@ pub fn process_vote(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nusantara_core::instruction::AccountMeta;
     use nusantara_core::program::VOTE_PROGRAM_ID;
-    use nusantara_core::{Account, Instruction, Message};
+    use nusantara_core::{Account, Message};
     use nusantara_crypto::hash;
     use nusantara_vote_program::{Vote, VoteAuthorize, VoteInit, VoteState};
 
@@ -359,12 +359,9 @@ mod tests {
         process_vote(&accounts, &data, &mut ctx, &sysvars).unwrap();
 
         let vote_acc = hash(b"vote");
-        let ix = Instruction {
-            program_id: *VOTE_PROGRAM_ID,
-            accounts: vec![AccountMeta::new(vote_acc, false)],
-            data: borsh::to_vec(&VoteInstruction::UpdateCommission(25)).unwrap(),
-        };
-        let msg = Message::new(&[ix], &vote_acc).unwrap();
+        let withdrawer = hash(b"withdrawer");
+        let ix = nusantara_vote_program::update_commission(&vote_acc, &withdrawer, 25);
+        let msg = Message::new(&[ix], &withdrawer).unwrap();
 
         let c_accounts: Vec<_> = msg
             .account_keys
@@ -379,7 +376,7 @@ mod tests {
                         .unwrap();
                     (*k, ctx.get_account(idx).unwrap().account.clone())
                 } else {
-                    (*k, Account::new(0, nusantara_crypto::Hash::zero()))
+                    (*k, Account::new(1_000_000, nusantara_crypto::Hash::zero()))
                 }
             })
             .collect();
@@ -398,5 +395,75 @@ mod tests {
         let acc = c_ctx.get_account(idx).unwrap();
         let state = VoteState::try_from_slice(&acc.account.data).unwrap();
         assert_eq!(state.commission, 25);
+    }
+
+    #[test]
+    fn update_commission_unauthorized() {
+        let (mut ctx, accounts, data, sysvars) = setup_vote_init();
+        process_vote(&accounts, &data, &mut ctx, &sysvars).unwrap();
+
+        let vote_acc = hash(b"vote");
+        let wrong_auth = hash(b"wrong");
+        let ix = nusantara_vote_program::update_commission(&vote_acc, &wrong_auth, 25);
+        let msg = Message::new(&[ix], &wrong_auth).unwrap();
+
+        let c_accounts: Vec<_> = msg
+            .account_keys
+            .iter()
+            .map(|k| {
+                if k == &vote_acc {
+                    let idx = ctx
+                        .message()
+                        .account_keys
+                        .iter()
+                        .position(|a| a == &vote_acc)
+                        .unwrap();
+                    (*k, ctx.get_account(idx).unwrap().account.clone())
+                } else {
+                    (*k, Account::new(1_000_000, nusantara_crypto::Hash::zero()))
+                }
+            })
+            .collect();
+
+        let compiled = msg.instructions[0].accounts.clone();
+        let c_data = msg.instructions[0].data.clone();
+        let mut c_ctx = TransactionContext::new(c_accounts, msg, 100, 100_000);
+        let err = process_vote(&compiled, &c_data, &mut c_ctx, &sysvars).unwrap_err();
+        assert!(matches!(err, RuntimeError::ProgramError { .. }));
+    }
+
+    #[test]
+    fn update_commission_over_100() {
+        let (mut ctx, accounts, data, sysvars) = setup_vote_init();
+        process_vote(&accounts, &data, &mut ctx, &sysvars).unwrap();
+
+        let vote_acc = hash(b"vote");
+        let withdrawer = hash(b"withdrawer");
+        let ix = nusantara_vote_program::update_commission(&vote_acc, &withdrawer, 150);
+        let msg = Message::new(&[ix], &withdrawer).unwrap();
+
+        let c_accounts: Vec<_> = msg
+            .account_keys
+            .iter()
+            .map(|k| {
+                if k == &vote_acc {
+                    let idx = ctx
+                        .message()
+                        .account_keys
+                        .iter()
+                        .position(|a| a == &vote_acc)
+                        .unwrap();
+                    (*k, ctx.get_account(idx).unwrap().account.clone())
+                } else {
+                    (*k, Account::new(1_000_000, nusantara_crypto::Hash::zero()))
+                }
+            })
+            .collect();
+
+        let compiled = msg.instructions[0].accounts.clone();
+        let c_data = msg.instructions[0].data.clone();
+        let mut c_ctx = TransactionContext::new(c_accounts, msg, 100, 100_000);
+        let err = process_vote(&compiled, &c_data, &mut c_ctx, &sysvars).unwrap_err();
+        assert!(matches!(err, RuntimeError::ProgramError { .. }));
     }
 }

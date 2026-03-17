@@ -153,6 +153,24 @@ pub fn authorize(
     }
 }
 
+pub fn update_commission(
+    vote_account: &Hash,
+    authorized_withdrawer: &Hash,
+    commission: u8,
+) -> Instruction {
+    let data = borsh::to_vec(&VoteInstruction::UpdateCommission(commission))
+        .expect("serialization cannot fail");
+
+    Instruction {
+        program_id: *VOTE_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*vote_account, false),
+            AccountMeta::new_readonly(*authorized_withdrawer, true),
+        ],
+        data,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

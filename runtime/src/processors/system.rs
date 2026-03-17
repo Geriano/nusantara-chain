@@ -1,4 +1,5 @@
 use borsh::BorshDeserialize;
+use nusantara_core::MAX_ACCOUNT_DATA_SIZE;
 use nusantara_system_program::SystemInstruction;
 
 use super::helpers::{require_accounts, require_signer};
@@ -9,6 +10,7 @@ use crate::error::RuntimeError;
 use crate::sysvar_cache::SysvarCache;
 use crate::transaction_context::TransactionContext;
 
+#[tracing::instrument(skip_all, fields(program = "system"))]
 pub fn process_system(
     accounts: &[u8],
     data: &[u8],
@@ -73,6 +75,14 @@ fn process_create_account(
 
     // Verify funder is signer
     require_signer(ctx, funder_idx)?;
+
+    // Check data size limit
+    if space > MAX_ACCOUNT_DATA_SIZE {
+        return Err(RuntimeError::AccountDataTooLarge {
+            size: space,
+            limit: MAX_ACCOUNT_DATA_SIZE,
+        });
+    }
 
     // Check rent exemption
     let min_balance = sysvars.rent().minimum_balance(space as usize);
@@ -166,6 +176,14 @@ fn process_allocate(
     let account_idx = accounts[0] as usize;
 
     require_signer(ctx, account_idx)?;
+
+    if space > MAX_ACCOUNT_DATA_SIZE {
+        return Err(RuntimeError::AccountDataTooLarge {
+            size: space,
+            limit: MAX_ACCOUNT_DATA_SIZE,
+        });
+    }
+
     {
         let acc = ctx.get_account(account_idx)?;
         if !acc.account.data.is_empty() {

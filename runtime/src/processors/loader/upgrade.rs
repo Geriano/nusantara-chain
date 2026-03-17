@@ -113,7 +113,10 @@ pub(super) fn process_upgrade(
         let pd = ctx.get_account_mut(program_data_idx)?;
         let old_bytecode_space = pd.account.data.len() - old_pd_header_len;
         if new_bytecode.len() > old_bytecode_space {
-            return Err(RuntimeError::AccountDataTooLarge);
+            return Err(RuntimeError::AccountDataTooLarge {
+                size: new_bytecode.len() as u64,
+                limit: old_bytecode_space as u64,
+            });
         }
         let mut new_data = new_header_bytes;
         new_data.extend_from_slice(&new_bytecode);

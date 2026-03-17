@@ -2,7 +2,7 @@ use nusantara_crypto::Hash;
 use nusantara_vote_program::Vote;
 use tracing::{info, warn};
 
-use crate::constants::{SLASH_PURGE_DEPTH, SLASH_PURGE_INTERVAL};
+use crate::constants::{MAX_VOTE_BATCH, SLASH_PURGE_DEPTH, SLASH_PURGE_INTERVAL};
 use crate::helpers;
 use crate::node::ValidatorNode;
 use crate::vote_tx::build_vote_transaction;
@@ -21,8 +21,11 @@ impl ValidatorNode {
             return;
         }
 
-        // Collect all unvoted slots in range (last_voted+1 ..= slot)
-        let vote_slots: Vec<u64> = (self.last_voted_slot + 1..=slot).collect();
+        // Collect unvoted slots, capped to MAX_VOTE_BATCH
+        let start = slot
+            .saturating_sub(MAX_VOTE_BATCH - 1)
+            .max(self.last_voted_slot + 1);
+        let vote_slots: Vec<u64> = (start..=slot).collect();
 
         let block_hash = self
             .bank

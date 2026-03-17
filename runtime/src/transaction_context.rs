@@ -22,6 +22,7 @@ pub struct AccountRefMut<'a> {
 pub struct TransactionContext {
     accounts: Vec<(Hash, Account)>,
     pre_accounts: Vec<(Hash, Account)>,
+    pre_balances: Vec<u64>,
     message: Message,
     pub slot: u64,
     compute_meter: ComputeMeter,
@@ -39,10 +40,12 @@ impl TransactionContext {
         slot: u64,
         compute_limit: u64,
     ) -> Self {
+        let pre_balances = accounts.iter().map(|(_, a)| a.lamports).collect();
         let pre_accounts = accounts.clone();
         Self {
             accounts,
             pre_accounts,
+            pre_balances,
             message,
             slot,
             compute_meter: ComputeMeter::new(compute_limit),
@@ -104,8 +107,8 @@ impl TransactionContext {
         self.accounts.len()
     }
 
-    pub fn pre_balances(&self) -> Vec<u64> {
-        self.pre_accounts.iter().map(|(_, a)| a.lamports).collect()
+    pub fn pre_balances(&self) -> &[u64] {
+        &self.pre_balances
     }
 
     pub fn post_balances(&self) -> Vec<u64> {
@@ -259,7 +262,7 @@ mod tests {
         let msg = test_message(1, 2, 3);
         let accounts = make_accounts(&msg);
         let ctx = TransactionContext::new(accounts.clone(), msg, 0, 10000);
-        assert_eq!(ctx.pre_balances(), vec![1000; accounts.len()]);
+        assert_eq!(ctx.pre_balances(), &vec![1000; accounts.len()][..]);
     }
 
     #[test]
@@ -335,7 +338,7 @@ mod tests {
         let n = accounts.len();
         let mut ctx = TransactionContext::new(accounts, msg, 0, 10000);
         ctx.get_account_mut(0).unwrap().account.lamports = 500;
-        assert_eq!(ctx.pre_balances(), vec![1000; n]);
+        assert_eq!(ctx.pre_balances(), &vec![1000; n][..]);
         let mut expected_post = vec![1000; n];
         expected_post[0] = 500;
         assert_eq!(ctx.post_balances(), expected_post);

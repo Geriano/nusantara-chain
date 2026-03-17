@@ -10,6 +10,7 @@ pub struct LoadedAccounts {
     pub total_data_size: u64,
 }
 
+#[tracing::instrument(skip_all, fields(account_count = account_keys.len()))]
 pub fn load_accounts(
     storage: &Storage,
     account_keys: &[Hash],

@@ -6,7 +6,7 @@ use nusantara_rpc::PubsubEvent;
 use nusantara_sysvar_program::SlotHashes;
 use tracing::{debug, info, warn};
 
-use crate::constants::ORPHAN_HORIZON;
+use crate::constants::{MAX_ORPHAN_BUFFER_SIZE, ORPHAN_HORIZON};
 use crate::error::ValidatorError;
 use crate::node::ValidatorNode;
 
@@ -134,6 +134,13 @@ impl ValidatorNode {
                     fork_tree_nodes = self.replay_stage.fork_tree().node_count(),
                     "buffering orphan block — parent not in fork tree"
                 );
+                // Evict oldest orphans if buffer is full
+                while self.orphan_blocks.len() >= MAX_ORPHAN_BUFFER_SIZE {
+                    if let Some(oldest_slot) = self.orphan_blocks.keys().next().copied() {
+                        self.orphan_blocks.remove(&oldest_slot);
+                        metrics::counter!("nusantara_orphan_evictions").increment(1);
+                    }
+                }
                 self.orphan_blocks.insert(slot, block);
                 self.request_missing_slots(parent_slot);
                 metrics::counter!("nusantara_orphan_blocks_buffered").increment(1);

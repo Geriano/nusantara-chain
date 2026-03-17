@@ -92,12 +92,13 @@ impl Tower {
 
         // 4. Check if bottom vote reached MAX_LOCKOUT_HISTORY -> becomes root
         let mut new_root = None;
-        while !self.vote_state.votes.is_empty()
-            && self.vote_state.votes[0].confirmation_count >= MAX_LOCKOUT_HISTORY as u32
-        {
-            let rooted = self.vote_state.votes.remove(0);
-            new_root = Some(rooted.slot);
-            self.vote_state.root_slot = Some(rooted.slot);
+        let root_count = self.vote_state.votes.iter()
+            .take_while(|v| v.confirmation_count >= MAX_LOCKOUT_HISTORY as u32)
+            .count();
+        if root_count > 0 {
+            let last_rooted = self.vote_state.votes.drain(..root_count).next_back().unwrap();
+            new_root = Some(last_rooted.slot);
+            self.vote_state.root_slot = Some(last_rooted.slot);
         }
 
         metrics::counter!("tower_votes_processed_total").increment(1);

@@ -15,6 +15,7 @@ mod buffer;
 mod deploy;
 mod upgrade;
 
+#[tracing::instrument(skip_all, fields(program = "loader"))]
 pub fn process_loader(
     accounts: &[u8],
     data: &[u8],

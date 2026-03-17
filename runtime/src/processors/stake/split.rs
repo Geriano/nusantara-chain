@@ -16,6 +16,10 @@ pub(super) fn process_split(
     let split_idx = accounts[1] as usize;
     let staker_idx = accounts[2] as usize;
 
+    if stake_idx == split_idx {
+        return Err(RuntimeError::AccountIndexAliasing { idx_a: stake_idx, idx_b: split_idx });
+    }
+
     let staker_address = require_signer(ctx, staker_idx)?;
 
     let (meta, stake_opt) = {

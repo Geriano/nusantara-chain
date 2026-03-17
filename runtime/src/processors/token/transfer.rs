@@ -17,6 +17,10 @@ pub(super) fn process_transfer(
     let dest_idx = accounts[1] as usize;
     let auth_idx = accounts[2] as usize;
 
+    if src_idx == dest_idx {
+        return Err(RuntimeError::AccountIndexAliasing { idx_a: src_idx, idx_b: dest_idx });
+    }
+
     let auth = ctx.get_account(auth_idx)?;
     if !auth.is_signer {
         return Err(super::token_err(TokenError::MissingSigner));

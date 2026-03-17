@@ -10,6 +10,9 @@ leader_schedule_slot_offset = 432_000
 [fee]
 lamports_per_signature = 5000
 
+[account]
+max_data_size = 10_485_760
+
 [programs]
 system = "system_program"
 rent = "rent_program"

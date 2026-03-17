@@ -213,19 +213,12 @@ fn execute_instructions(
     sysvars: &SysvarCache,
     program_cache: &ProgramCache,
 ) -> Result<(), RuntimeError> {
-    let instructions = ctx.message().instructions.clone();
-    let account_keys = ctx.message().account_keys.clone();
-
-    for ix in &instructions {
-        let program_id = &account_keys[ix.program_id_index as usize];
-        dispatch_instruction(
-            program_id,
-            &ix.accounts,
-            &ix.data,
-            ctx,
-            sysvars,
-            program_cache,
-        )?;
+    for ix_idx in 0..ctx.message().instructions.len() {
+        let program_id_index = ctx.message().instructions[ix_idx].program_id_index as usize;
+        let program_id = ctx.message().account_keys[program_id_index];
+        let accounts = ctx.message().instructions[ix_idx].accounts.clone();
+        let data = ctx.message().instructions[ix_idx].data.clone();
+        dispatch_instruction(&program_id, &accounts, &data, ctx, sysvars, program_cache)?;
     }
 
     Ok(())

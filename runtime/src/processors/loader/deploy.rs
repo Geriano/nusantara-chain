@@ -1,3 +1,4 @@
+use nusantara_core::MAX_ACCOUNT_DATA_SIZE;
 use nusantara_core::program::LOADER_PROGRAM_ID;
 use nusantara_loader_program::state::LoaderState;
 use nusantara_vm::validate_wasm;
@@ -81,6 +82,14 @@ pub(super) fn process_deploy(
     };
     let pd_header_bytes =
         borsh::to_vec(&pd_header).map_err(|e| RuntimeError::InvalidAccountData(e.to_string()))?;
+
+    // Guard against unbounded allocation
+    if max_data_len > MAX_ACCOUNT_DATA_SIZE {
+        return Err(RuntimeError::AccountDataTooLarge {
+            size: max_data_len,
+            limit: MAX_ACCOUNT_DATA_SIZE,
+        });
+    }
 
     let bytecode_space = max_data_len.max(bytecode.len() as u64) as usize;
     let total_pd_size = pd_header_bytes.len() + bytecode_space;

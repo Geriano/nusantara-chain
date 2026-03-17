@@ -12,6 +12,7 @@ use crate::error::RuntimeError;
 use crate::sysvar_cache::SysvarCache;
 use crate::transaction_context::TransactionContext;
 
+#[tracing::instrument(skip_all, fields(program = "stake"))]
 pub fn process_stake(
     accounts: &[u8],
     data: &[u8],

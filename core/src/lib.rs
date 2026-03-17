@@ -25,3 +25,7 @@ pub use program::{
     LOADER_PROGRAM_ID,
 };
 pub use commitment::CommitmentLevel;
+
+/// Maximum account data size in bytes (10 MiB).
+pub const MAX_ACCOUNT_DATA_SIZE: u64 =
+    native_token::const_parse_u64(env!("NUSA_ACCOUNT_MAX_DATA_SIZE"));

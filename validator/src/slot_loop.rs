@@ -19,6 +19,7 @@ use crate::error::ValidatorError;
 use crate::node::ValidatorNode;
 
 impl ValidatorNode {
+    #[tracing::instrument(skip_all, fields(start_slot = self.current_slot))]
     pub async fn run(&mut self, cli: &Cli) -> Result<(), ValidatorError> {
         info!(start_slot = self.current_slot, "starting validator");
 
@@ -61,7 +62,7 @@ impl ValidatorNode {
 
                     self.submit_vote(self.current_slot);
                     self.process_orphan_queue()?;
-                    self.check_epoch_boundary(cli.snapshot_interval);
+                    self.check_epoch_boundary(cli.snapshot_interval).await;
 
                     // Periodically report gossip peer count
                     if self.current_slot.is_multiple_of(GOSSIP_REPORT_INTERVAL) {
@@ -116,6 +117,7 @@ impl ValidatorNode {
             .unwrap_or(false)
     }
 
+    #[tracing::instrument(skip_all, fields(slot = self.current_slot))]
     async fn leader_slot(
         &mut self,
         broadcast: &BroadcastStage,
@@ -292,6 +294,7 @@ impl ValidatorNode {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all, fields(slot = self.current_slot))]
     async fn non_leader_slot(
         &mut self,
         block_rx: &mut mpsc::Receiver<Block>,

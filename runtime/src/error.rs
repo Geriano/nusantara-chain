@@ -20,8 +20,11 @@ pub enum RuntimeError {
     #[error("account owner mismatch")]
     AccountOwnerMismatch,
 
-    #[error("account data too large")]
-    AccountDataTooLarge,
+    #[error("account data too large: {size} bytes exceeds {limit} byte limit")]
+    AccountDataTooLarge { size: u64, limit: u64 },
+
+    #[error("account index aliasing: index {idx_a} and {idx_b} refer to the same account")]
+    AccountIndexAliasing { idx_a: usize, idx_b: usize },
 
     // Balance errors
     #[error("insufficient funds: need {needed}, have {available}")]

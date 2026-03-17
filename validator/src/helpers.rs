@@ -14,7 +14,7 @@ use crate::constants::RECENT_BLOCKHASHES_COUNT;
 pub(crate) fn unix_timestamp_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("time went backwards")
+        .unwrap_or(std::time::Duration::ZERO)
         .as_secs() as i64
 }
 
@@ -23,7 +23,7 @@ pub(crate) fn unix_timestamp_secs() -> i64 {
 pub(crate) fn unix_timestamp_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("time went backwards")
+        .unwrap_or(std::time::Duration::ZERO)
         .as_millis() as u64
 }
 

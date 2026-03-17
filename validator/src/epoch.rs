@@ -1,5 +1,10 @@
+use std::sync::Arc;
+
+use nusantara_consensus::bank::ConsensusBank;
+use nusantara_core::EpochSchedule;
 use nusantara_crypto::Hash;
-use nusantara_rent_program::RentDue;
+use nusantara_rent_program::{Rent, RentDue};
+use nusantara_storage::Storage;
 use tracing::{info, warn};
 
 use crate::constants::{MS_PER_YEAR, RENT_PARTITIONS};
@@ -7,16 +12,43 @@ use crate::helpers;
 use crate::node::ValidatorNode;
 
 impl ValidatorNode {
-    pub(crate) fn check_epoch_boundary(&mut self, snapshot_interval: u64) {
+    pub(crate) async fn check_epoch_boundary(&mut self, snapshot_interval: u64) {
         let current_epoch = self.epoch_schedule.get_epoch(self.current_slot);
         let next_epoch = self.epoch_schedule.get_epoch(self.current_slot + 1);
 
         if next_epoch > current_epoch {
-            // 0. Collect rent from accounts
-            self.collect_rent(current_epoch);
+            // 0. Collect rent from accounts (blocking I/O — offloaded)
+            {
+                let storage = Arc::clone(&self.storage);
+                let bank = Arc::clone(&self.bank);
+                let rent = self.rent.clone();
+                let epoch_schedule = self.epoch_schedule.clone();
+                let current_slot = self.current_slot;
+                let epoch = current_epoch;
+                let _ = tokio::task::spawn_blocking(move || {
+                    collect_rent_blocking(
+                        &storage,
+                        &bank,
+                        &rent,
+                        &epoch_schedule,
+                        epoch,
+                        current_slot,
+                    );
+                })
+                .await;
+            }
 
-            // 1. Calculate and distribute rewards
-            self.distribute_epoch_rewards(current_epoch);
+            // 1. Calculate and distribute rewards (blocking I/O — offloaded)
+            {
+                let storage = Arc::clone(&self.storage);
+                let bank = Arc::clone(&self.bank);
+                let current_slot = self.current_slot;
+                let epoch = current_epoch;
+                let _ = tokio::task::spawn_blocking(move || {
+                    distribute_epoch_rewards_blocking(&storage, &bank, epoch, current_slot);
+                })
+                .await;
+            }
 
             // 2. Process stake transitions (multi-epoch warmup/cooldown)
             self.process_stake_transitions(next_epoch);
@@ -72,7 +104,7 @@ impl ValidatorNode {
             .unwrap_or(Hash::zero());
 
         let timestamp = helpers::unix_timestamp_secs();
-        let storage = std::sync::Arc::clone(&self.storage);
+        let storage = Arc::clone(&self.storage);
         let current_slot = self.current_slot;
         let snapshot_dir = self.snapshot_dir.clone();
 
@@ -97,144 +129,10 @@ impl ValidatorNode {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to create snapshot");
+                    metrics::counter!("nusantara_snapshot_failures").increment(1);
                 }
             }
         });
-    }
-
-    fn collect_rent(&self, epoch: u64) {
-        let partition = epoch % RENT_PARTITIONS;
-        let mut rent_collected = 0u64;
-        let mut accounts_closed = 0u64;
-
-        let rent = &self.rent;
-        let ms_per_epoch =
-            self.epoch_schedule.slots_per_epoch * nusantara_core::DEFAULT_SLOT_DURATION_MS;
-
-        // Fetch accounts from storage (blocking I/O, but rent collection is
-        // inherently sequential within the epoch boundary — keeping it
-        // synchronous here is simpler and the epoch boundary is infrequent).
-        if let Ok(accounts) = self.storage.get_accounts_in_partition(partition, RENT_PARTITIONS) {
-            for (address, mut account) in accounts {
-                // Integer rent calculation (deterministic across architectures)
-                let rent_due = match rent.due_epoch(
-                    account.lamports,
-                    account.data.len(),
-                    ms_per_epoch,
-                    MS_PER_YEAR,
-                ) {
-                    RentDue::Exempt => continue,
-                    RentDue::Paying(amount) => amount,
-                };
-
-                if rent_due == 0 {
-                    continue;
-                }
-
-                if account.lamports <= rent_due {
-                    // Account can't pay rent — close it
-                    rent_collected += account.lamports;
-                    account.lamports = 0;
-                    account.data.clear();
-                    accounts_closed += 1;
-                } else {
-                    account.lamports -= rent_due;
-                    rent_collected += rent_due;
-                }
-
-                let _ = self
-                    .storage
-                    .put_account(&address, self.current_slot, &account);
-            }
-        }
-
-        if rent_collected > 0 {
-            // Burn collected rent (reduces total supply)
-            self.bank.burn_fees(rent_collected);
-            info!(
-                epoch,
-                partition, rent_collected, accounts_closed, "rent collected"
-            );
-        }
-    }
-
-    fn distribute_epoch_rewards(&mut self, epoch: u64) {
-        use nusantara_consensus::rewards::RewardsCalculator;
-
-        let vote_states = self.bank.get_all_vote_states();
-        let delegations = self.bank.get_all_delegations();
-
-        if delegations.is_empty() {
-            return;
-        }
-
-        // Use tracked total supply (initialized from genesis sum)
-        let total_supply = self.bank.total_supply();
-        let inflation_rewards = RewardsCalculator::epoch_inflation_rewards(epoch, total_supply);
-
-        match RewardsCalculator::calculate_epoch_rewards(
-            epoch,
-            inflation_rewards,
-            &vote_states,
-            &delegations,
-        ) {
-            Ok(rewards) => {
-                let mut total_distributed = 0u64;
-                for partition in &rewards.partitions {
-                    for entry in partition {
-                        // Credit staker reward to stake account in storage
-                        if let Ok(Some(mut account)) =
-                            self.storage.get_account(&entry.stake_account)
-                        {
-                            account.lamports = account.lamports.saturating_add(entry.lamports);
-                            if let Err(e) = self.storage.put_account(
-                                &entry.stake_account,
-                                self.current_slot,
-                                &account,
-                            ) {
-                                warn!(error = %e, "failed to credit staker reward");
-                            }
-                            // Also update in-memory delegation stake
-                            self.bank
-                                .update_delegation_stake(&entry.stake_account, account.lamports);
-                        }
-                        total_distributed += entry.lamports;
-
-                        // Credit validator commission to vote account
-                        if entry.commission_lamports > 0 {
-                            if let Ok(Some(mut vote_account)) =
-                                self.storage.get_account(&entry.vote_account)
-                            {
-                                vote_account.lamports = vote_account
-                                    .lamports
-                                    .saturating_add(entry.commission_lamports);
-                                if let Err(e) = self.storage.put_account(
-                                    &entry.vote_account,
-                                    self.current_slot,
-                                    &vote_account,
-                                ) {
-                                    warn!(error = %e, "failed to credit commission");
-                                }
-                            }
-                            total_distributed += entry.commission_lamports;
-                        }
-                    }
-                }
-
-                // Inflation increases total supply
-                self.bank
-                    .set_total_supply(total_supply.saturating_add(total_distributed));
-
-                info!(
-                    epoch,
-                    total_rewards = total_distributed,
-                    "epoch rewards distributed"
-                );
-            }
-            Err(e) => {
-                warn!(epoch, error = %e, "failed to calculate epoch rewards");
-            }
-        }
     }
 
     fn process_stake_transitions(&self, epoch: u64) {
@@ -252,6 +150,139 @@ impl ValidatorNode {
                     self.bank.remove_stake_delegation(stake_account);
                 }
             }
+        }
+    }
+}
+
+/// Freestanding rent collection to run in a blocking thread.
+fn collect_rent_blocking(
+    storage: &Storage,
+    bank: &ConsensusBank,
+    rent: &Rent,
+    epoch_schedule: &EpochSchedule,
+    epoch: u64,
+    current_slot: u64,
+) {
+    let partition = epoch % RENT_PARTITIONS;
+    let mut rent_collected = 0u64;
+    let mut accounts_closed = 0u64;
+
+    let ms_per_epoch =
+        epoch_schedule.slots_per_epoch * nusantara_core::DEFAULT_SLOT_DURATION_MS;
+
+    if let Ok(accounts) = storage.get_accounts_in_partition(partition, RENT_PARTITIONS) {
+        for (address, mut account) in accounts {
+            let rent_due = match rent.due_epoch(
+                account.lamports,
+                account.data.len(),
+                ms_per_epoch,
+                MS_PER_YEAR,
+            ) {
+                RentDue::Exempt => continue,
+                RentDue::Paying(amount) => amount,
+            };
+
+            if rent_due == 0 {
+                continue;
+            }
+
+            if account.lamports <= rent_due {
+                rent_collected += account.lamports;
+                account.lamports = 0;
+                account.data.clear();
+                accounts_closed += 1;
+            } else {
+                account.lamports -= rent_due;
+                rent_collected += rent_due;
+            }
+
+            let _ = storage.put_account(&address, current_slot, &account);
+        }
+    }
+
+    if rent_collected > 0 {
+        bank.burn_fees(rent_collected);
+        info!(
+            epoch,
+            partition, rent_collected, accounts_closed, "rent collected"
+        );
+    }
+}
+
+/// Freestanding reward distribution to run in a blocking thread.
+fn distribute_epoch_rewards_blocking(
+    storage: &Storage,
+    bank: &ConsensusBank,
+    epoch: u64,
+    current_slot: u64,
+) {
+    use nusantara_consensus::rewards::RewardsCalculator;
+
+    let vote_states = bank.get_all_vote_states();
+    let delegations = bank.get_all_delegations();
+
+    if delegations.is_empty() {
+        return;
+    }
+
+    let total_supply = bank.total_supply();
+    let inflation_rewards = RewardsCalculator::epoch_inflation_rewards(epoch, total_supply);
+
+    match RewardsCalculator::calculate_epoch_rewards(
+        epoch,
+        inflation_rewards,
+        &vote_states,
+        &delegations,
+    ) {
+        Ok(rewards) => {
+            let mut total_distributed = 0u64;
+            for partition in &rewards.partitions {
+                for entry in partition {
+                    if let Ok(Some(mut account)) =
+                        storage.get_account(&entry.stake_account)
+                    {
+                        account.lamports = account.lamports.saturating_add(entry.lamports);
+                        if let Err(e) = storage.put_account(
+                            &entry.stake_account,
+                            current_slot,
+                            &account,
+                        ) {
+                            warn!(error = %e, "failed to credit staker reward");
+                        }
+                        bank.update_delegation_stake(&entry.stake_account, account.lamports);
+                    }
+                    total_distributed += entry.lamports;
+
+                    if entry.commission_lamports > 0 {
+                        if let Ok(Some(mut vote_account)) =
+                            storage.get_account(&entry.vote_account)
+                        {
+                            vote_account.lamports = vote_account
+                                .lamports
+                                .saturating_add(entry.commission_lamports);
+                            if let Err(e) = storage.put_account(
+                                &entry.vote_account,
+                                current_slot,
+                                &vote_account,
+                            ) {
+                                warn!(error = %e, "failed to credit commission");
+                            }
+                        }
+                        total_distributed += entry.commission_lamports;
+                    }
+                }
+            }
+
+            bank.set_total_supply(total_supply.saturating_add(total_distributed));
+
+            info!(
+                epoch,
+                total_rewards = total_distributed,
+                "epoch rewards distributed"
+            );
+        }
+        Err(e) => {
+            warn!(epoch, error = %e, "failed to calculate epoch rewards");
         }
     }
 }

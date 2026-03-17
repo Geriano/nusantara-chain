@@ -36,6 +36,12 @@ pub(crate) const RECENT_BLOCKHASHES_COUNT: usize = 300;
 /// Timeout (ms) for ClusterInfo startup before considering peers lost.
 pub(crate) const CLUSTER_INFO_TIMEOUT_MS: u64 = 60_000;
 
+/// Maximum number of buffered orphan blocks before eviction.
+pub(crate) const MAX_ORPHAN_BUFFER_SIZE: usize = 256;
+
+/// Maximum number of slots in a single vote batch.
+pub(crate) const MAX_VOTE_BATCH: u64 = 32;
+
 /// Maximum entries in the WASM ProgramCache.
 pub(crate) const PROGRAM_CACHE_SIZE: usize = 256;
 
