@@ -94,6 +94,7 @@ impl RpcState {
         handlers::slot::get_blockhash,
         handlers::account::get_account,
         handlers::block::get_block,
+        handlers::block::get_block_transactions,
         handlers::transaction::get_transaction,
         handlers::transaction::send_transaction,
         handlers::transaction::send_and_confirm,
@@ -117,6 +118,8 @@ impl RpcState {
         types::HealthResponse,
         types::AccountResponse,
         types::BlockResponse,
+        types::BlockTransactionEntry,
+        types::BlockTransactionsResponse,
         types::TransactionStatusResponse,
         types::SendTransactionRequest,
         types::SendTransactionResponse,
@@ -223,6 +226,10 @@ impl RpcServer {
             .route(
                 "/v1/block/{slot}",
                 axum::routing::get(handlers::block::get_block),
+            )
+            .route(
+                "/v1/block/{slot}/transactions",
+                axum::routing::get(handlers::block::get_block_transactions),
             )
             .route(
                 "/v1/transaction/{hash}",

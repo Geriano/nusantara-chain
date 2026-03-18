@@ -47,6 +47,25 @@ pub struct BlockResponse {
     pub merkle_root: String,
 }
 
+// ── Block Transactions ──
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockTransactionEntry {
+    pub signature: String,
+    pub tx_index: u32,
+    pub status: String,
+    pub fee: u64,
+    pub compute_units_consumed: u64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockTransactionsResponse {
+    pub slot: u64,
+    pub transactions: Vec<BlockTransactionEntry>,
+}
+
 // ── Transaction ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
