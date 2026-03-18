@@ -83,6 +83,25 @@ pub struct SendTransactionResponse {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendAndConfirmRequest {
+    pub transaction: String,
+    #[serde(default = "default_confirm_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_confirm_timeout_ms() -> u64 {
+    5000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendAndConfirmResponse {
+    pub signature: String,
+    pub slot: u64,
+    pub status: String,
+    pub confirmation_time_ms: u64,
+}
+
 // ── Airdrop ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +113,22 @@ pub struct AirdropRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AirdropResponse {
     pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AirdropAndConfirmRequest {
+    pub address: String,
+    pub lamports: u64,
+    #[serde(default = "default_confirm_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AirdropAndConfirmResponse {
+    pub signature: String,
+    pub slot: u64,
+    pub status: String,
+    pub confirmation_time_ms: u64,
 }
 
 // ── Validators ──

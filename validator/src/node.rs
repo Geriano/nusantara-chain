@@ -99,6 +99,11 @@ pub struct ValidatorNode {
 
     // Last slot we submitted a vote for (used to batch unvoted slots)
     pub(crate) last_voted_slot: u64,
+
+    // Parent slot used in the last leader block production.
+    // When `Some(parent)` and the new parent == parent + 1 (linear extension),
+    // we skip the expensive account index rewind (no fork switch occurred).
+    pub(crate) last_produced_parent: Option<u64>,
 }
 
 impl ValidatorNode {

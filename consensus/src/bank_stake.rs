@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use nusantara_crypto::Hash;
 use nusantara_stake_program::Delegation;
@@ -42,12 +43,24 @@ impl ConsensusBank {
     }
 
     /// Get the stake distribution: (validator_identity, effective_stake).
+    /// Uses the cached vec when available; falls back to building from epoch_stakes.
     pub fn get_stake_distribution(&self) -> Vec<(Hash, u64)> {
+        let cached = self.cached_stake_vec.read();
+        if !cached.is_empty() {
+            return (**cached).clone();
+        }
+        drop(cached);
         self.epoch_stakes
             .read()
             .iter()
             .map(|(&k, &v)| (k, v))
             .collect()
+    }
+
+    /// Get the cached stake distribution as an `Arc` — zero-copy for callers
+    /// that only need a read reference.
+    pub fn get_stake_distribution_cached(&self) -> Arc<Vec<(Hash, u64)>> {
+        Arc::clone(&self.cached_stake_vec.read())
     }
 
     /// Recalculate effective stakes for a new epoch.
@@ -101,10 +114,12 @@ impl ConsensusBank {
             }
         }
 
-        // Atomic swap of epoch_stakes
+        // Atomic swap of epoch_stakes and update cached vec
         let validator_count = new_stakes.len();
+        let cached_vec: Vec<(Hash, u64)> = new_stakes.iter().map(|(&k, &v)| (k, v)).collect();
         *self.epoch_stakes.write() = new_stakes;
         *self.total_active_stake.write() = total;
+        *self.cached_stake_vec.write() = Arc::new(cached_vec);
 
         metrics::gauge!("nusantara_bank_total_active_stake").set(total as f64);
         metrics::gauge!("nusantara_bank_epoch_stake_validators").set(validator_count as f64);

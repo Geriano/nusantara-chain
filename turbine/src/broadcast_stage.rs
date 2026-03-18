@@ -11,6 +11,7 @@ use crate::shredder::Shredder;
 use crate::signed_shred::SignedShred;
 use crate::turbine_tree::TurbineTree;
 
+#[derive(Clone)]
 pub struct BroadcastStage {
     keypair: Arc<Keypair>,
     socket: Arc<UdpSocket>,

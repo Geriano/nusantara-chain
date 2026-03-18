@@ -62,15 +62,15 @@ impl Signature {
     }
 
     pub fn verify(&self, pubkey: &PublicKey, message: &[u8]) -> Result<(), CryptoError> {
+        let pq_pk = pubkey.to_pq()?;
         let pq_sig = dilithium3::DetachedSignature::from_bytes(&self.0)
             .map_err(|_| CryptoError::VerificationFailed)?;
-        let pq_pk = pubkey.to_pq()?;
-        pqcrypto_dilithium::dilithium3::verify_detached_signature(&pq_sig, message, &pq_pk)
+        dilithium3::verify_detached_signature(&pq_sig, message, &pq_pk)
             .map_err(|_| CryptoError::VerificationFailed)
     }
 
     pub(crate) fn from_pq(sig: &dilithium3::DetachedSignature) -> Self {
-        Self(sig.as_bytes().to_vec())
+        Self(pqcrypto_traits::sign::DetachedSignature::as_bytes(sig).to_vec())
     }
 }
 

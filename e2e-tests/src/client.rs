@@ -18,7 +18,7 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(10),
+            timeout: Duration::from_secs(60),
             max_retries: 3,
             retry_backoff: Duration::from_millis(500),
             pool_max_idle_per_host: 4,

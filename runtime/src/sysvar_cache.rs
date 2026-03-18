@@ -1,4 +1,7 @@
+use std::collections::HashSet;
+
 use nusantara_core::EpochSchedule;
+use nusantara_crypto::Hash;
 use nusantara_rent_program::Rent;
 use nusantara_sysvar_program::{Clock, RecentBlockhashes, SlotHashes, StakeHistory};
 
@@ -57,6 +60,8 @@ impl SysvarCacheBuilder {
     }
 
     pub fn build(self) -> SysvarCache {
+        let recent_blockhash_set: HashSet<Hash> =
+            self.recent_blockhashes.0.iter().copied().collect();
         SysvarCache {
             clock: self.clock,
             rent: self.rent,
@@ -64,6 +69,7 @@ impl SysvarCacheBuilder {
             slot_hashes: self.slot_hashes,
             stake_history: self.stake_history,
             recent_blockhashes: self.recent_blockhashes,
+            recent_blockhash_set,
         }
     }
 }
@@ -75,6 +81,7 @@ pub struct SysvarCache {
     slot_hashes: SlotHashes,
     stake_history: StakeHistory,
     recent_blockhashes: RecentBlockhashes,
+    recent_blockhash_set: HashSet<Hash>,
 }
 
 impl SysvarCache {
@@ -86,6 +93,8 @@ impl SysvarCache {
         stake_history: StakeHistory,
         recent_blockhashes: RecentBlockhashes,
     ) -> Self {
+        let recent_blockhash_set: HashSet<Hash> =
+            recent_blockhashes.0.iter().copied().collect();
         Self {
             clock,
             rent,
@@ -93,7 +102,13 @@ impl SysvarCache {
             slot_hashes,
             stake_history,
             recent_blockhashes,
+            recent_blockhash_set,
         }
+    }
+
+    /// O(1) blockhash lookup using the pre-built HashSet.
+    pub fn contains_blockhash(&self, hash: &Hash) -> bool {
+        self.recent_blockhash_set.contains(hash)
     }
 
     pub fn clock(&self) -> &Clock {
@@ -157,5 +172,13 @@ mod tests {
         let h = hash(b"blockhash1");
         assert!(cache.recent_blockhashes().contains(&h));
         assert!(!cache.recent_blockhashes().contains(&hash(b"other")));
+    }
+
+    #[test]
+    fn contains_blockhash_hashset() {
+        let cache = test_cache();
+        let h = hash(b"blockhash1");
+        assert!(cache.contains_blockhash(&h));
+        assert!(!cache.contains_blockhash(&hash(b"other")));
     }
 }

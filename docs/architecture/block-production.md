@@ -18,7 +18,7 @@ creation time and a fixed slot duration.
 | Target tick duration | 14.062us | `consensus/config.toml` (`target_tick_duration_us`) |
 | Total hashes per slot | 800,000 | 64 * 12,500 |
 | Slots per epoch | 432,000 | `core/config.toml` (`slots_per_epoch`) |
-| Epoch duration | ~4.5 days | 432,000 * 0.9s |
+| Epoch duration | ~2 days | 432,000 * 0.4s |
 
 The `SlotClock` computes the current slot from wall-clock time:
 

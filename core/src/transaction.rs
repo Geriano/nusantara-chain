@@ -4,12 +4,26 @@ use nusantara_crypto::{Hash, Keypair, PublicKey, Signature, hash as crypto_hash}
 use crate::error::CoreError;
 use crate::message::Message;
 
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct Transaction {
     pub signatures: Vec<Signature>,
     pub signer_pubkeys: Vec<PublicKey>,
     pub message: Message,
+    /// Cached transaction hash to avoid redundant SHA3-512 recomputation.
+    /// Skipped in borsh serialization; excluded from equality checks.
+    #[borsh(skip)]
+    cached_hash: std::sync::OnceLock<Hash>,
 }
+
+impl PartialEq for Transaction {
+    fn eq(&self, other: &Self) -> bool {
+        self.signatures == other.signatures
+            && self.signer_pubkeys == other.signer_pubkeys
+            && self.message == other.message
+    }
+}
+
+impl Eq for Transaction {}
 
 impl Transaction {
     pub fn new(message: Message) -> Self {
@@ -17,6 +31,7 @@ impl Transaction {
             signatures: Vec::new(),
             signer_pubkeys: Vec::new(),
             message,
+            cached_hash: std::sync::OnceLock::new(),
         }
     }
 
@@ -34,6 +49,8 @@ impl Transaction {
             .iter()
             .map(|kp| kp.public_key().clone())
             .collect();
+        // Invalidate cached hash since signatures changed
+        self.cached_hash = std::sync::OnceLock::new();
     }
 
     pub fn verify(&self, pubkeys: &[PublicKey]) -> Result<(), CoreError> {
@@ -75,11 +92,13 @@ impl Transaction {
     }
 
     pub fn hash(&self) -> Hash {
-        if self.signatures.is_empty() {
-            crypto_hash(&self.message_data())
-        } else {
-            crypto_hash(self.signatures[0].as_bytes())
-        }
+        *self.cached_hash.get_or_init(|| {
+            if self.signatures.is_empty() {
+                crypto_hash(&self.message_data())
+            } else {
+                crypto_hash(self.signatures[0].as_bytes())
+            }
+        })
     }
 }
 

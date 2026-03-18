@@ -80,8 +80,8 @@ runtime. The first account is always the fee payer.
 
 ### 1.4 Sign
 
-The message is signed with the payer's **Dilithium3 (ML-DSA-65)** post-quantum
-keypair. Multiple signers are supported when the message requires them.
+The message is signed with the payer's **Dilithium3** keypair. Multiple signers
+are supported when the message requires them.
 
 Key sizes:
 - Public key: 1,952 bytes
@@ -135,7 +135,7 @@ is subject to per-IP limits:
 | `quic_max_concurrent_streams` | 1,024 |
 
 TLS certificates are self-signed; identity verification happens at the
-application layer via Dilithium signatures, not TLS (`SkipServerVerification`).
+application layer via Dilithium3 signatures, not TLS (`SkipServerVerification`).
 
 ### 2.2 Wire Protocol
 
@@ -268,7 +268,7 @@ The `Shredder` breaks the block into erasure-coded shreds for network transport:
 1. Borsh-serialize the `Block` into bytes
 2. Split into 1,228-byte data chunks -> `DataShred[]`
 3. FEC encode in groups of 32 -> `CodeShred[]` (33% redundancy)
-4. Sign each shred with the leader's Dilithium keypair
+4. Sign each shred with the leader's Dilithium3 keypair
 
 | Parameter | Value |
 |-----------|-------|

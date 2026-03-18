@@ -161,9 +161,9 @@ private key.
 PDA = SHA3-512(seeds... + program_id + "ProgramDerivedAddress")
 ```
 
-PDAs are guaranteed to not lie on the Ed25519 curve (Nusantara uses Dilithium,
-so this constraint is enforced differently), meaning no private key exists for
-them. Only the owning program can sign on their behalf via `invoke_signed`.
+PDAs are guaranteed to have no corresponding private key because they are derived
+via SHA3-512 hash derivation (no curve involved). Only the owning program can sign
+on their behalf via `invoke_signed`.
 
 ---
 

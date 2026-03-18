@@ -8,8 +8,8 @@ administrative tasks for running a Nusantara validator.
 When `nusantara-validator` starts, it executes the following steps in order:
 
 1. **Open storage** -- Open or create a RocksDB database at the `--ledger-path` directory.
-2. **Load keypair** -- Read the Dilithium3 identity keypair from disk (5984 raw bytes:
-   1952-byte public key + 4032-byte secret key). If `--generate-keypair` is specified,
+2. **Load keypair** -- Read the Dilithium3 identity keypair from disk (5,984 raw bytes:
+   1,952-byte public key + 4,032-byte secret key). If `--generate-keypair` is specified,
    generate a new keypair and write it to the given path.
 3. **Parse genesis** -- Read and parse `genesis.toml` from the path specified by
    `--genesis-config`.
@@ -122,16 +122,16 @@ Pruning runs asynchronously after each new root is set. It does not block block 
 nusantara-validator --generate-keypair /path/to/identity.key
 ```
 
-This writes 5984 raw bytes: the 1952-byte Dilithium3 public key followed by the 4032-byte
-secret key.
+This writes 5,984 raw bytes: the 1,952-byte Dilithium3 public key followed by the
+4,032-byte secret key.
 
 ### Keypair Format
 
 | Segment | Offset | Size | Content |
 |---------|--------|------|---------|
-| Public key | 0 | 1952 bytes | Dilithium3 (ML-DSA-65) public key |
-| Secret key | 1952 | 4032 bytes | Dilithium3 (ML-DSA-65) secret key |
-| Total | 0 | 5984 bytes | Raw binary, no encoding |
+| Public key | 0 | 1,952 bytes | Dilithium3 public key |
+| Secret key | 1,952 | 4,032 bytes | Dilithium3 secret key |
+| Total | 0 | 5,984 bytes | Raw binary, no encoding |
 
 ### Identity Derivation
 

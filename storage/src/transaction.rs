@@ -36,6 +36,52 @@ impl Storage {
         self.put_cf(CF_TRANSACTIONS, tx_hash.as_bytes(), &value)
     }
 
+    /// Prepare a transaction status write into a `StorageWriteBatch` without committing.
+    pub fn prepare_transaction_status(
+        tx_hash: &Hash,
+        meta: &TransactionStatusMeta,
+    ) -> Result<crate::write_batch::StorageWriteBatch, StorageError> {
+        let mut batch = crate::write_batch::StorageWriteBatch::new();
+        Self::append_transaction_status(&mut batch, tx_hash, meta)?;
+        Ok(batch)
+    }
+
+    /// Append a transaction status write directly into the caller's batch.
+    pub fn append_transaction_status(
+        batch: &mut crate::write_batch::StorageWriteBatch,
+        tx_hash: &Hash,
+        meta: &TransactionStatusMeta,
+    ) -> Result<(), StorageError> {
+        let value =
+            borsh::to_vec(meta).map_err(|e| StorageError::Serialization(e.to_string()))?;
+        batch.put(CF_TRANSACTIONS, tx_hash.as_bytes().to_vec(), value);
+        Ok(())
+    }
+
+    /// Prepare an address-signature write into a `StorageWriteBatch` without committing.
+    pub fn prepare_address_signature(
+        address: &Hash,
+        slot: u64,
+        tx_index: u32,
+        tx_hash: &Hash,
+    ) -> crate::write_batch::StorageWriteBatch {
+        let mut batch = crate::write_batch::StorageWriteBatch::new();
+        Self::append_address_signature(&mut batch, address, slot, tx_index, tx_hash);
+        batch
+    }
+
+    /// Append an address-signature write directly into the caller's batch.
+    pub fn append_address_signature(
+        batch: &mut crate::write_batch::StorageWriteBatch,
+        address: &Hash,
+        slot: u64,
+        tx_index: u32,
+        tx_hash: &Hash,
+    ) {
+        let key = address_sig_key(address, slot, tx_index);
+        batch.put(CF_ADDRESS_SIGNATURES, key.to_vec(), tx_hash.as_bytes().to_vec());
+    }
+
     /// Get a transaction status by hash.
     pub fn get_transaction_status(
         &self,

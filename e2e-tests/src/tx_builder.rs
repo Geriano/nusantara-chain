@@ -11,7 +11,8 @@ use tracing::{debug, warn};
 use crate::client::NusantaraClient;
 use crate::error::E2eError;
 use crate::types::{
-    AirdropRequest, AirdropResponse, BlockhashResponse, SendTransactionRequest,
+    AirdropAndConfirmRequest, AirdropAndConfirmResponse, AirdropRequest, AirdropResponse,
+    BlockhashResponse, SendAndConfirmRequest, SendAndConfirmResponse, SendTransactionRequest,
     SendTransactionResponse, TransactionStatusResponse,
 };
 
@@ -66,6 +67,33 @@ pub fn build_transfer_with_nonce(
     Ok(URL_SAFE_NO_PAD.encode(&bytes))
 }
 
+/// Build a signed transfer with a unique nonce and return both the encoded tx
+/// and the pre-computed signature (base64 of tx hash). Allows the caller to
+/// know the signature before submitting.
+pub fn build_transfer_with_nonce_and_sig(
+    keypair: &Keypair,
+    to: &Hash,
+    lamports: u64,
+    blockhash: &Hash,
+    nonce: u64,
+) -> Result<(String, String), E2eError> {
+    let from = keypair.address();
+    let nonce_ix = nusantara_compute_budget_program::set_compute_unit_price(nonce);
+    let transfer_ix = nusantara_system_program::transfer(&from, to, lamports);
+    let mut msg = Message::new(&[nonce_ix, transfer_ix], &from)
+        .map_err(|e| E2eError::Other(format!("failed to build message: {e}")))?;
+    msg.recent_blockhash = *blockhash;
+
+    let mut tx = Transaction::new(msg);
+    tx.sign(&[keypair]);
+
+    let signature = tx.hash().to_base64();
+    let bytes =
+        borsh::to_vec(&tx).map_err(|e| E2eError::Serialization(e.to_string()))?;
+    let encoded = URL_SAFE_NO_PAD.encode(&bytes);
+    Ok((encoded, signature))
+}
+
 /// Send a transfer: fetch blockhash, build, sign, submit. Returns signature.
 pub async fn send_transfer(
     client: &NusantaraClient,
@@ -89,6 +117,37 @@ pub async fn send_transfer(
     Ok(resp.signature)
 }
 
+/// Send a transfer using the send-and-confirm endpoint for sub-slot confirmation.
+/// Returns the confirmed response directly without polling.
+pub async fn send_transfer_and_confirm(
+    client: &NusantaraClient,
+    keypair: &Keypair,
+    to: &Hash,
+    lamports: u64,
+    timeout_ms: u64,
+) -> Result<SendAndConfirmResponse, E2eError> {
+    let blockhash = fetch_blockhash(client).await?;
+    let encoded = build_transfer(keypair, to, lamports, &blockhash)?;
+
+    let resp: SendAndConfirmResponse = client
+        .post(
+            "/v1/transaction/send-and-confirm",
+            &SendAndConfirmRequest {
+                transaction: encoded,
+                timeout_ms,
+            },
+        )
+        .await?;
+
+    debug!(
+        signature = %resp.signature,
+        slot = resp.slot,
+        confirmation_time_ms = resp.confirmation_time_ms,
+        "transfer confirmed"
+    );
+    Ok(resp)
+}
+
 /// Request an airdrop for the given address. Returns signature.
 pub async fn airdrop(
     client: &NusantaraClient,
@@ -109,18 +168,47 @@ pub async fn airdrop(
     Ok(resp.signature)
 }
 
+/// Request an airdrop and wait for confirmation in a single request.
+/// Returns the confirmed response directly without polling.
+pub async fn airdrop_and_confirm(
+    client: &NusantaraClient,
+    address: &Hash,
+    lamports: u64,
+    timeout_ms: u64,
+) -> Result<AirdropAndConfirmResponse, E2eError> {
+    let resp: AirdropAndConfirmResponse = client
+        .post(
+            "/v1/airdrop-and-confirm",
+            &AirdropAndConfirmRequest {
+                address: address.to_base64(),
+                lamports,
+                timeout_ms,
+            },
+        )
+        .await?;
+
+    debug!(
+        signature = %resp.signature,
+        slot = resp.slot,
+        confirmation_time_ms = resp.confirmation_time_ms,
+        "airdrop confirmed"
+    );
+    Ok(resp)
+}
+
 /// Poll `/v1/transaction/{sig}` until confirmed or timeout.
 ///
-/// Uses exponential backoff starting at 50ms, doubling up to 2s.
-/// Recognises the `"received"` status (transaction in mempool, not yet confirmed).
+/// Uses exponential backoff starting at 400ms (aligned to slot time), doubling
+/// up to 1s. Recognises the `"received"` status (transaction in mempool, not
+/// yet confirmed). Prefer `send_transfer_and_confirm` for sub-slot latency.
 pub async fn wait_for_confirmation(
     client: &NusantaraClient,
     signature: &str,
     timeout: Duration,
 ) -> Result<TransactionStatusResponse, E2eError> {
     let start = Instant::now();
-    let mut poll_interval = Duration::from_millis(50);
-    let max_interval = Duration::from_millis(2000);
+    let mut poll_interval = Duration::from_millis(100);
+    let max_interval = Duration::from_millis(500);
 
     loop {
         if start.elapsed() > timeout {
@@ -197,8 +285,8 @@ async fn wait_for_confirmation_owned(
     timeout: Duration,
 ) -> Result<TransactionStatusResponse, E2eError> {
     let start = Instant::now();
-    let mut poll_interval = Duration::from_millis(50);
-    let max_interval = Duration::from_millis(2000);
+    let mut poll_interval = Duration::from_millis(100);
+    let max_interval = Duration::from_millis(500);
 
     loop {
         if start.elapsed() > timeout {

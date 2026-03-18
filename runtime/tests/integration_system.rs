@@ -57,6 +57,7 @@ fn create_account_and_verify_storage() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
     assert!(result.status.is_ok());
 
@@ -105,6 +106,7 @@ fn transfer_and_verify_balances() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
     assert!(result.status.is_ok());
     assert_eq!(result.fee, 5000);
@@ -148,6 +150,7 @@ fn rent_enforcement_on_create() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
     assert!(result.status.is_err());
 }
@@ -179,6 +182,7 @@ fn multiple_transfers_sequential() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
     assert!(result.status.is_ok());
 

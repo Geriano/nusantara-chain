@@ -96,6 +96,7 @@ impl RpcState {
         handlers::block::get_block,
         handlers::transaction::get_transaction,
         handlers::transaction::send_transaction,
+        handlers::transaction::send_and_confirm,
         handlers::epoch::get_epoch_info,
         handlers::leader::get_leader_schedule,
         handlers::leader::get_leader_schedule_epoch,
@@ -104,6 +105,7 @@ impl RpcState {
         handlers::vote::get_vote_account,
         handlers::signatures::get_signatures,
         handlers::faucet::airdrop,
+        handlers::faucet::airdrop_and_confirm,
         handlers::snapshot::get_latest_snapshot,
         handlers::snapshot_download::download_snapshot,
         handlers::program::get_program,
@@ -118,6 +120,8 @@ impl RpcState {
         types::TransactionStatusResponse,
         types::SendTransactionRequest,
         types::SendTransactionResponse,
+        types::SendAndConfirmRequest,
+        types::SendAndConfirmResponse,
         types::SlotResponse,
         types::BlockhashResponse,
         types::EpochInfoResponse,
@@ -132,6 +136,8 @@ impl RpcState {
         types::SignatureEntry,
         types::AirdropRequest,
         types::AirdropResponse,
+        types::AirdropAndConfirmRequest,
+        types::AirdropAndConfirmResponse,
         handlers::snapshot::SnapshotResponse,
         types::ProgramResponse,
         handlers::accounts_by::AccountsByResponse,
@@ -227,6 +233,10 @@ impl RpcServer {
                 axum::routing::post(handlers::transaction::send_transaction),
             )
             .route(
+                "/v1/transaction/send-and-confirm",
+                axum::routing::post(handlers::transaction::send_and_confirm),
+            )
+            .route(
                 "/v1/epoch-info",
                 axum::routing::get(handlers::epoch::get_epoch_info),
             )
@@ -257,6 +267,10 @@ impl RpcServer {
             .route(
                 "/v1/airdrop",
                 axum::routing::post(handlers::faucet::airdrop),
+            )
+            .route(
+                "/v1/airdrop-and-confirm",
+                axum::routing::post(handlers::faucet::airdrop_and_confirm),
             )
             .route(
                 "/v1/snapshot/latest",

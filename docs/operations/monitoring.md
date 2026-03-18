@@ -169,7 +169,7 @@ Fires when the validator's current slot falls behind expected wall-clock slot by
 than 10 slots.
 
 ```promql
-nusantara_current_slot < (time() - nusantara_genesis_time) / 0.9
+nusantara_current_slot < (time() - nusantara_genesis_time) / 0.4
 ```
 
 **Severity**: P1 -- validator is falling behind the cluster.

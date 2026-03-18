@@ -2,7 +2,7 @@
 //!
 //! These allow WASM programs to perform cryptographic operations using the
 //! same primitives as the rest of the Nusantara blockchain (SHA3-512 for
-//! hashing, Dilithium3 / ML-DSA-65 for signatures).
+//! hashing, Dilithium3 for post-quantum signatures).
 
 use nusantara_crypto::{Hash, PublicKey, Signature, create_program_address, hash};
 
@@ -22,7 +22,7 @@ pub fn sha3_512_cost(data_len: usize) -> u64 {
     COST_SHA3_512_BASE + (data_len as u64 / 64)
 }
 
-/// Verify a Dilithium3 (ML-DSA-65) detached signature.
+/// Verify a Dilithium3 detached signature.
 ///
 /// Returns `Ok(true)` if the signature is valid, `Ok(false)` if it is
 /// well-formed but does not match, or `Err` if the key/signature bytes

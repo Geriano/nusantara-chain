@@ -21,6 +21,10 @@ pub struct SlotExecutionResult {
     /// For accounts modified by multiple transactions, the final state is kept.
     /// Sorted by address for deterministic state tree updates.
     pub account_deltas: Vec<(Hash, Account)>,
+    /// Transaction statuses collected during execution for inline pubsub.
+    /// Each entry is `(tx_hash, status_string)` where status_string is
+    /// "success" or "failed: <reason>".
+    pub tx_statuses: Vec<(Hash, String)>,
 }
 
 #[instrument(skip_all, fields(slot = slot, tx_count = transactions.len()))]
@@ -35,9 +39,25 @@ pub fn execute_slot(
     let mut committer = SlotCommitter::new();
 
     for (tx_index, tx) in transactions.iter().enumerate() {
-        let result = execute_transaction(tx, storage, sysvars, fee_calculator, slot, program_cache);
-        committer.commit_result(tx_index, result, slot, storage)?;
+        let result = {
+            let cache = committer.account_cache();
+            execute_transaction(
+                tx,
+                storage,
+                sysvars,
+                fee_calculator,
+                slot,
+                program_cache,
+                Some(cache),
+            )
+        };
+        committer.commit_result(tx_index, result, slot)?;
+        // flush_batch is now a no-op (cache provides cross-batch visibility)
+        committer.flush_batch(storage)?;
     }
+
+    // Single RocksDB write at slot end
+    committer.flush_all(storage)?;
 
     let result = committer.finalize(slot);
 

@@ -7,7 +7,7 @@ use tracing::info;
 use nusantara_e2e_tests::bench::config::{BenchConfig, OutputFormat};
 use nusantara_e2e_tests::bench::report::BenchReport;
 use nusantara_e2e_tests::bench::sender::{TransactionSender, generate_keypairs};
-use nusantara_e2e_tests::bench::tracker;
+use nusantara_e2e_tests::bench::tracker::{self, PreSubscribedTracker};
 use nusantara_e2e_tests::client::{ClientConfig, NusantaraClient};
 use nusantara_e2e_tests::cluster::wait_for_cluster_ready;
 use nusantara_e2e_tests::funding;
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         config.num_accounts
     );
 
-    // Use parallel funding for >50 accounts, sequential otherwise
+    // Use parallel funding for larger account sets, sequential for smaller
     if config.num_accounts > 50 {
         info!(
             batch_size = config.funding_batch_size,
@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
         funding::fund_accounts(&client, &keypairs, config.fund_amount).await?;
     }
 
-    // Prepare and send
+    // Prepare sender
     let sender = TransactionSender::new(
         client.clone(),
         keypairs,
@@ -81,17 +81,42 @@ async fn main() -> anyhow::Result<()> {
         config.lamports_per_tx,
     );
 
+    // Phase 1: Build all transactions (pre-compute signatures)
+    info!(tx_count = config.tx_count, "building transactions...");
+    let batch = sender.prepare_all().await;
+    let signatures = batch.signatures();
+    info!(built = signatures.len(), "transactions built");
+
+    // Phase 2: Connect WebSocket and pre-subscribe to all signatures
+    let ws_url = client
+        .primary_url()
+        .replace("http://", "ws://")
+        .replace("https://", "wss://")
+        + "/v1/ws";
+
+    let ws_tracker = PreSubscribedTracker::connect_and_subscribe(&ws_url, &signatures).await;
+
+    // Phase 3: Send pre-built transactions
     info!(tx_count = config.tx_count, num_senders, "sending transactions...");
     let submit_start = Instant::now();
-    let submissions = sender.send_all().await;
+    let submissions = sender.send_prepared(batch).await;
     let submit_end = Instant::now();
 
-    // Track confirmations
+    // Phase 4: Track confirmations
     info!(
         submitted = submissions.len(),
         "tracking confirmations..."
     );
-    let tracking = tracker::track(client.clone(), &submissions, config.confirm_timeout()).await;
+    let tracking = match ws_tracker {
+        Ok(tracker) => {
+            info!("using WebSocket pre-subscribed tracker");
+            tracker.collect(&submissions, config.confirm_timeout()).await
+        }
+        Err(e) => {
+            info!(%e, "WebSocket pre-subscribe failed, falling back to HTTP polling");
+            tracker::track(client.clone(), &submissions, config.confirm_timeout()).await
+        }
+    };
 
     // Report
     let report = BenchReport::compute(submissions.len(), submit_start, submit_end, &tracking);

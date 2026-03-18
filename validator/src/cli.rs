@@ -82,6 +82,10 @@ pub struct Cli {
     #[arg(long)]
     pub generate_keypair: Option<String>,
 
+    /// Override PoH hashes per tick (default: compiled 12500, use 1 for benchmarks)
+    #[arg(long)]
+    pub hashes_per_tick: Option<u64>,
+
     /// Maximum number of ledger slots to retain (older slots are pruned).
     /// Set to 0 to disable pruning.
     #[arg(long, default_value = "256")]

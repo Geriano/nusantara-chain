@@ -9,7 +9,7 @@ use crate::storage::Storage;
 ///
 /// Records the two conflicting block hashes the validator voted for,
 /// the reporter who detected the violation, and the detection timestamp.
-/// Signatures are omitted to keep the proof compact (Dilithium sigs are 3,309 bytes each).
+/// Signatures are omitted to keep the proof compact (Dilithium3 sigs are 3309 bytes each).
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SlashProof {
     /// Identity hash of the validator that double-voted.

@@ -126,17 +126,17 @@ impl CrdsGossipPull {
 
 /// Estimate the borsh-serialized size of a CRDS value (approximate).
 fn estimate_crds_value_size(value: &CrdsValue) -> usize {
-    // Signature is fixed-size (3309 bytes for Dilithium3)
+    // Signature is Vec<u8> with 4-byte length prefix (4 + 3309 bytes for Dilithium3)
     // Data varies by variant
     let data_size = match &value.data {
-        CrdsData::ContactInfo(_) => 2200, // pubkey(1952) + addrs + fields
+        CrdsData::ContactInfo(_) => 2200, // pubkey(4+1952) + addrs + fields
         CrdsData::Vote(_) => 200,         // from(64) + slot(8) + hash(64) + wallclock(8)
         CrdsData::EpochSlots(es) => 100 + es.slots.len() * 8,
         CrdsData::LowestSlot(_) => 150,
         CrdsData::SlashProof(_) => 350,
     };
-    // enum tag(1) + data_size + signature(3309)
-    1 + data_size + 3309
+    // enum tag(1) + data_size + signature(4 + 3309)
+    1 + data_size + 4 + 3309
 }
 
 #[cfg(test)]

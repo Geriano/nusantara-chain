@@ -4,7 +4,10 @@ use nusantara_crypto::Keypair;
 
 use crate::error::CliError;
 
-const KEYPAIR_SIZE: usize = 1952 + 4032; // pubkey + secret
+use nusantara_crypto::pubkey::PUBLIC_KEY_BYTES;
+use nusantara_crypto::keypair::SECRET_KEY_BYTES;
+
+const KEYPAIR_SIZE: usize = PUBLIC_KEY_BYTES + SECRET_KEY_BYTES; // pubkey + secret
 
 pub fn load_keypair(path: &str) -> Result<Keypair, CliError> {
     let expanded = shellexpand(path);
@@ -18,7 +21,7 @@ pub fn load_keypair(path: &str) -> Result<Keypair, CliError> {
         )));
     }
 
-    Keypair::from_bytes(&bytes[..1952], &bytes[1952..])
+    Keypair::from_bytes(&bytes[..PUBLIC_KEY_BYTES], &bytes[PUBLIC_KEY_BYTES..])
         .map_err(|e| CliError::Keypair(format!("invalid keypair: {e}")))
 }
 

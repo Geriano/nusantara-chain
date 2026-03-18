@@ -23,13 +23,13 @@ and integrators who need a high-level map before diving into individual crate RE
 
 ## Design Philosophy
 
-Nusantara is a high-throughput, post-quantum-secure blockchain inspired by Solana's
-architecture but diverging in several fundamental ways:
+Nusantara is a high-throughput blockchain inspired by Solana's architecture but
+diverging in several fundamental ways:
 
 | Concern | Solana | Nusantara |
 |---------|--------|-----------|
 | Hash function | SHA-256 (32 bytes) | SHA3-512 (64 bytes) |
-| Signature scheme | Ed25519 | Dilithium3 / ML-DSA-65 |
+| Signature scheme | Ed25519 | Dilithium3 (CRYSTALS-Dilithium, NIST Level 3) |
 | Smart-contract VM | BPF/SBF (JIT) | WASM (wasmi interpreter, fuel-metered) |
 | Serialization | Borsh + bincode | Borsh everywhere (no serde for on-chain data) |
 | User-facing encoding | Base58 | Base64 URL-safe no-pad |
@@ -37,9 +37,8 @@ architecture but diverging in several fundamental ways:
 
 **Core tenets:**
 
-1. **Post-quantum from day one.** Every keypair, signature, and hash uses
-   NIST-standardized post-quantum primitives. There is no "migration path" because
-   there is nothing to migrate from.
+1. **Strong cryptography from day one.** Every keypair, signature, and hash uses
+   well-audited, widely-adopted primitives (SHA3-512 + Dilithium3).
 
 2. **Stateless execution.** The runtime crate has no mutable state of its own.
    It reads accounts from storage, executes a transaction, and returns a set of
@@ -181,10 +180,10 @@ flowchart TB
 
 ### 1. Primitive Layer
 
-**crypto** -- Post-quantum cryptographic primitives.
+**crypto** -- Cryptographic primitives.
 
 - SHA3-512 hashing (64-byte output via the `sha3` crate)
-- Dilithium3 (ML-DSA-65) signatures via `pqcrypto-dilithium 0.5`
+- Dilithium3 post-quantum signatures via `pqcrypto-dilithium` and `pqcrypto-traits`
 - Key sizes: PublicKey 1,952 bytes, SecretKey 4,032 bytes, Signature 3,309 bytes
 - Account IDs with `.nusantara` suffix and segment validation rules
 - Base64 URL-safe no-pad encoding for all user-facing representations
@@ -321,7 +320,7 @@ Fixed-width binary keys (no Borsh length-prefixes) enable efficient range scans.
 
 **tpu-forward** -- QUIC-based transaction ingress and leader forwarding.
 
-- Quinn-based QUIC server with self-signed TLS (Dilithium identity verified at app layer)
+- Quinn-based QUIC server with self-signed TLS (Dilithium3 identity verified at app layer)
 - Rate limiting: 8 connections per IP, 100 tx/s per IP, 50,000 tx/s global
 - Structural transaction validation (no signature verification at ingress)
 - If current node is leader, transactions go to local channel; otherwise QUIC-forwarded
@@ -458,23 +457,23 @@ sequenceDiagram
 
 ### SHA3-512
 
-- **Why not SHA-256?** SHA-256 offers only 128-bit post-quantum security (Grover's
-  algorithm). SHA3-512 provides 256-bit post-quantum security, matching the security
-  level of Dilithium3.
+- **Why not SHA-256?** SHA3-512 provides 256-bit security with a 64-byte output,
+  offering stronger collision resistance than SHA-256's 128-bit level.
 - **Trade-off:** 64-byte hashes double storage and bandwidth compared to 32-byte hashes.
   This is acceptable for a chain designed to last decades.
 - **NIST standard:** SHA3 (FIPS 202) is a distinct construction (Keccak sponge) from
   SHA-2, providing algorithm diversity.
 
-### Dilithium3 (ML-DSA-65)
+### Dilithium3
 
-- **Why not Ed25519?** Ed25519 is broken by a sufficiently large quantum computer.
-  Dilithium3 is the NIST Post-Quantum Cryptography standard (FIPS 204).
-- **Size impact:** Public keys are 1,952 bytes (vs. 32 for Ed25519), signatures are
-  3,309 bytes (vs. 64). This increases transaction size significantly but is the
-  minimum cost of post-quantum security at NIST Level 3.
-- **Performance:** Dilithium3 signing and verification are slower than Ed25519 but
-  still practical for blockchain throughput targets.
+- **Why Dilithium3?** Dilithium3 (CRYSTALS-Dilithium, NIST Level 3) provides
+  post-quantum secure signatures, protecting the chain against future quantum
+  computing attacks. It is a NIST-standardized lattice-based scheme.
+- **Post-quantum security:** NIST Level 3 post-quantum security ensures long-term
+  resistance against both classical and quantum adversaries.
+- **Trade-off:** Larger key and signature sizes (1,952-byte public keys, 3,309-byte
+  signatures) increase transaction sizes compared to classical schemes, but this is
+  acceptable for a chain designed to be quantum-resistant from day one.
 
 ### Borsh Serialization
 
@@ -607,14 +606,12 @@ Key instrumented spans:
 
 ## Security Considerations
 
-### Post-Quantum Threat Model
+### Cryptographic Model
 
-- All on-chain signatures use Dilithium3 (NIST Level 3, ~128-bit classical / ~128-bit
-  quantum security).
-- Hash function SHA3-512 provides 256-bit pre-image resistance even under Grover's
-  algorithm.
+- All on-chain signatures use Dilithium3 (NIST Level 3 post-quantum security).
+- Hash function SHA3-512 provides 256-bit pre-image resistance.
 - TLS between nodes uses standard rustls, but node identity is verified at the application
-  layer using Dilithium signatures (the `SkipServerVerification` pattern in TPU).
+  layer using Dilithium3 signatures (the `SkipServerVerification` pattern in TPU).
 
 ### Execution Safety
 
@@ -644,7 +641,7 @@ Key instrumented spans:
 
 | Crate | Binary | Category | Key External Deps |
 |-------|--------|----------|-------------------|
-| `crypto` | -- | Primitive | sha3, pqcrypto-dilithium, base64 |
+| `crypto` | -- | Primitive | sha3, pqcrypto-dilithium, pqcrypto-traits, base64 |
 | `core` | -- | Primitive | borsh |
 | `system-program` | -- | Program | borsh |
 | `rent-program` | -- | Program | borsh |

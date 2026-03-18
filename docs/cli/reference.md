@@ -97,7 +97,7 @@ Config updated:
 
 ### keygen
 
-Generate a new Dilithium3 (ML-DSA-65) keypair.
+Generate a new Dilithium3 keypair.
 
 ```bash
 nusantara keygen [-o <PATH>]

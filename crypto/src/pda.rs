@@ -71,7 +71,7 @@ pub fn create_program_address(seeds: &[&[u8]], program_id: &Hash) -> Result<Hash
 /// Returns the first derived address along with the bump seed that produced it.
 ///
 /// In Nusantara's SHA3-512-based scheme every bump produces a valid hash (there
-/// is no "off-curve" rejection like in Ed25519-based systems), so this always
+/// is no "off-curve" rejection like in elliptic-curve-based systems), so this always
 /// returns with bump = 255. The function signature and bump-search pattern are
 /// retained for API compatibility with Solana-style PDAs and to leave room for
 /// future validity constraints.

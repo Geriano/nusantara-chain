@@ -306,7 +306,7 @@ flowchart BT
 
 ```
 nusantara-crypto
-  External: sha3, pqcrypto-dilithium, pqcrypto-traits, base64, borsh, thiserror, rand, zeroize
+  External: sha3, pqcrypto-dilithium, pqcrypto-traits, base64, borsh, thiserror, zeroize
   Internal: (none -- leaf crate)
 ```
 

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use nusantara_core::Account;
 use nusantara_crypto::{Hash, Hasher};
-use nusantara_storage::{Storage, TransactionStatus, TransactionStatusMeta};
+use nusantara_storage::{Storage, StorageWriteBatch, TransactionStatus, TransactionStatusMeta};
 
 use crate::batch_executor::SlotExecutionResult;
 use crate::error::RuntimeError;
@@ -21,6 +21,13 @@ use crate::transaction_executor::TransactionResult;
 /// `commit_result()` must be called in **original transaction index order** so
 /// that the delta hasher produces a deterministic hash identical across
 /// sequential and parallel execution paths.
+///
+/// # Batched writes
+///
+/// Instead of issuing individual RocksDB writes per-account per-transaction,
+/// the committer accumulates all writes into a `StorageWriteBatch`. The caller
+/// must invoke `flush_batch()` at batch boundaries (e.g., after each parallel
+/// scheduling batch) to make writes visible for subsequent batches.
 pub(crate) struct SlotCommitter {
     transactions_executed: u64,
     transactions_succeeded: u64,
@@ -29,6 +36,13 @@ pub(crate) struct SlotCommitter {
     total_compute_consumed: u64,
     delta_hasher: Hasher,
     merged_deltas: HashMap<Hash, Account>,
+    /// Accumulated RocksDB write batch — flushed once at slot end via `flush_all()`.
+    write_batch: StorageWriteBatch,
+    /// Collected transaction statuses for inline pubsub (avoids re-reading from storage).
+    tx_statuses: Vec<(Hash, String)>,
+    /// In-memory cache of committed account states within this slot.
+    /// Updated by `commit_result()`, read by next batch's `load_accounts()`.
+    account_cache: HashMap<Hash, Account>,
 }
 
 impl SlotCommitter {
@@ -41,30 +55,37 @@ impl SlotCommitter {
             total_compute_consumed: 0,
             delta_hasher: Hasher::default(),
             merged_deltas: HashMap::new(),
+            write_batch: StorageWriteBatch::new(),
+            tx_statuses: Vec::new(),
+            account_cache: HashMap::new(),
         }
     }
 
-    /// Commit a single transaction result to storage and accumulate its deltas.
+    /// Commit a single transaction result: accumulate deltas into the write batch.
     ///
     /// Must be called in original transaction index order for deterministic hashing.
+    /// Does NOT write to storage — call `flush_batch()` to commit.
+    ///
+    /// Uses pre-execution account states from `result.loaded_accounts` to skip
+    /// redundant `get_account()` RocksDB reads for owner index tracking.
     pub fn commit_result(
         &mut self,
         tx_idx: usize,
         result: TransactionResult,
         slot: u64,
-        storage: &Storage,
     ) -> Result<(), RuntimeError> {
         self.transactions_executed += 1;
         self.total_fees += result.fee;
         self.total_compute_consumed += result.compute_units_consumed;
 
-        let status = match &result.status {
+        let (status, status_str) = match &result.status {
             Ok(()) => {
                 self.transactions_succeeded += 1;
-                TransactionStatus::Success
+                (TransactionStatus::Success, "success".to_string())
             }
             Err(e) => {
                 self.transactions_failed += 1;
+                let msg = e.to_string();
                 tracing::warn!(
                     slot,
                     tx_idx,
@@ -72,13 +93,29 @@ impl SlotCommitter {
                     fee = result.fee,
                     "transaction failed"
                 );
-                TransactionStatus::Failed(e.to_string())
+                (TransactionStatus::Failed(msg.clone()), format!("failed: {msg}"))
             }
         };
 
-        // Commit account deltas to storage
+        // Collect status for inline pubsub
+        self.tx_statuses.push((result.tx_hash, status_str));
+
+        // Accumulate account deltas directly into write batch (no intermediate allocations).
+        // Uses loaded_accounts for owner index tracking instead of re-reading from RocksDB.
         for (address, account) in &result.account_deltas {
-            storage.put_account(address, slot, account)?;
+            let old_account = result
+                .loaded_accounts
+                .iter()
+                .find(|(addr, _)| addr == address)
+                .map(|(_, a)| a);
+
+            Storage::append_account_write_with_old(
+                &mut self.write_batch,
+                address,
+                slot,
+                account,
+                old_account,
+            );
 
             // Feed into delta hash
             let account_bytes = borsh::to_vec(account)
@@ -88,9 +125,12 @@ impl SlotCommitter {
 
             // Track final state for each address (last write wins)
             self.merged_deltas.insert(*address, account.clone());
+
+            // Update in-memory cache for cross-batch reads
+            self.account_cache.insert(*address, account.clone());
         }
 
-        // Record transaction status
+        // Accumulate transaction status directly into write batch
         let meta = TransactionStatusMeta {
             slot,
             status,
@@ -99,13 +139,39 @@ impl SlotCommitter {
             post_balances: result.post_balances,
             compute_units_consumed: result.compute_units_consumed,
         };
-        storage.put_transaction_status(&result.tx_hash, &meta)?;
+        Storage::append_transaction_status(&mut self.write_batch, &result.tx_hash, &meta)?;
 
-        // Record address signatures
+        // Accumulate address signatures directly into write batch
         for (address, _) in &result.account_deltas {
-            storage.put_address_signature(address, slot, tx_idx as u32, &result.tx_hash)?;
+            Storage::append_address_signature(
+                &mut self.write_batch,
+                address,
+                slot,
+                tx_idx as u32,
+                &result.tx_hash,
+            );
         }
 
+        Ok(())
+    }
+
+    /// Get read-only reference to the account cache for cross-batch reads.
+    pub fn account_cache(&self) -> &HashMap<Hash, Account> {
+        &self.account_cache
+    }
+
+    /// No-op: writes are deferred to `flush_all()` at slot end.
+    /// The `account_cache` provides cross-batch visibility.
+    pub fn flush_batch(&mut self, _storage: &Storage) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    /// Flush all accumulated writes to RocksDB in a single atomic batch.
+    /// Called once at the end of slot execution.
+    pub fn flush_all(&self, storage: &Storage) -> Result<(), RuntimeError> {
+        if !self.write_batch.is_empty() {
+            storage.write(&self.write_batch)?;
+        }
         Ok(())
     }
 
@@ -126,6 +192,7 @@ impl SlotCommitter {
             total_compute_consumed: self.total_compute_consumed,
             account_delta_hash,
             account_deltas,
+            tx_statuses: self.tx_statuses,
         }
     }
 }

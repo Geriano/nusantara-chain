@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use nusantara_crypto::Keypair;
 use tokio::task::JoinSet;
@@ -11,33 +10,33 @@ use crate::tx_builder;
 
 /// Fund multiple accounts via sequential airdrops.
 ///
-/// Each airdrop is confirmed before proceeding to the next.
+/// Uses the `airdrop-and-confirm` endpoint for sub-slot confirmation latency.
 /// The faucet has a max of 10 NUSA per request.
 pub async fn fund_accounts(
     client: &NusantaraClient,
     keypairs: &[Keypair],
     lamports_each: u64,
 ) -> Result<(), E2eError> {
-    let confirm_timeout = Duration::from_secs(30);
-    let pacing = Duration::from_millis(50);
+    let confirm_timeout_ms = 30_000;
 
     for (i, kp) in keypairs.iter().enumerate() {
         let address = kp.address();
-        let sig = tx_builder::airdrop(client, &address, lamports_each).await?;
-        let status = tx_builder::wait_for_confirmation(client, &sig, confirm_timeout).await?;
-        if status.status != "success" {
+        let resp =
+            tx_builder::airdrop_and_confirm(client, &address, lamports_each, confirm_timeout_ms)
+                .await?;
+        if !resp.status.starts_with("success") {
             return Err(E2eError::Other(format!(
                 "airdrop for account {i} failed: {}",
-                status.status
+                resp.status
             )));
         }
         info!(
             account = i,
             address = %address.to_base64(),
             lamports = lamports_each,
+            confirmation_time_ms = resp.confirmation_time_ms,
             "funded account"
         );
-        tokio::time::sleep(pacing).await;
     }
 
     Ok(())
@@ -45,9 +44,9 @@ pub async fn fund_accounts(
 
 /// Fund multiple accounts via parallel batched airdrops.
 ///
-/// Splits keypairs into chunks of `batch_size`, fires up to `concurrency` airdrops
-/// concurrently within each chunk, then batch-confirms all signatures before
-/// moving to the next chunk. Failed airdrops are retried up to 3 times.
+/// Splits keypairs into chunks of `batch_size`, fires up to `concurrency`
+/// airdrop-and-confirm requests concurrently within each chunk.
+/// Each request confirms in a single HTTP round-trip via the pubsub channel.
 pub async fn fund_accounts_parallel(
     client: Arc<NusantaraClient>,
     keypairs: &[Keypair],
@@ -55,9 +54,7 @@ pub async fn fund_accounts_parallel(
     batch_size: usize,
     concurrency: usize,
 ) -> Result<(), E2eError> {
-    let confirm_timeout = Duration::from_secs(60);
-    let max_retries = 3u32;
-    let slot_pacing = Duration::from_millis(400); // ~1 slot between chunks
+    let confirm_timeout_ms: u64 = 30_000;
 
     let total = keypairs.len();
     let chunks: Vec<&[Keypair]> = keypairs.chunks(batch_size).collect();
@@ -71,10 +68,8 @@ pub async fn fund_accounts_parallel(
             "funding chunk"
         );
 
-        // Collect addresses for this chunk
         let addresses: Vec<_> = chunk.iter().map(|kp| kp.address()).collect();
 
-        // Fire airdrops concurrently with bounded concurrency via semaphore
         let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
         let mut join_set = JoinSet::new();
 
@@ -86,100 +81,51 @@ pub async fn fund_accounts_parallel(
 
             join_set.spawn(async move {
                 let _permit = sem.acquire().await.expect("semaphore closed");
-                let sig = tx_builder::airdrop(&client, &address, lamports_each).await?;
-                Ok::<(usize, String), E2eError>((account_idx, sig))
+                let resp = tx_builder::airdrop_and_confirm(
+                    &client,
+                    &address,
+                    lamports_each,
+                    confirm_timeout_ms,
+                )
+                .await?;
+                Ok::<(usize, String, String), E2eError>((
+                    account_idx,
+                    resp.signature,
+                    resp.status,
+                ))
             });
         }
 
-        // Collect airdrop results
-        let mut signatures: Vec<(usize, String)> = Vec::with_capacity(chunk.len());
-        let mut airdrop_failures: Vec<(usize, nusantara_crypto::Hash)> = Vec::new();
+        let mut confirmed = 0usize;
+        let mut failed = 0usize;
 
         while let Some(result) = join_set.join_next().await {
             match result {
-                Ok(Ok((idx, sig))) => signatures.push((idx, sig)),
+                Ok(Ok((_idx, _sig, status))) => {
+                    if status.starts_with("success") {
+                        confirmed += 1;
+                    } else {
+                        failed += 1;
+                        warn!(status, "airdrop completed with non-success status");
+                    }
+                }
                 Ok(Err(e)) => {
-                    warn!(%e, "airdrop failed in batch");
-                    // We'll retry these
-                    airdrop_failures.push((0, nusantara_crypto::Hash::zero()));
+                    failed += 1;
+                    warn!(%e, "airdrop-and-confirm failed");
                 }
                 Err(e) => {
+                    failed += 1;
                     warn!(%e, "airdrop task panicked");
                 }
             }
         }
 
-        // Batch-confirm all signatures
-        let sigs: Vec<String> = signatures.iter().map(|(_, s)| s.clone()).collect();
-        if !sigs.is_empty() {
-            let results =
-                tx_builder::wait_for_confirmations_batch(client.clone(), sigs, confirm_timeout)
-                    .await;
-
-            let confirmed = results.iter().filter(|r| r.result.is_ok()).count();
-            let failed = results.len() - confirmed;
-
-            info!(
-                chunk = chunk_idx,
-                confirmed,
-                failed,
-                "chunk confirmation complete"
-            );
-
-            // Retry failed confirmations
-            if failed > 0 {
-                let failed_sigs: Vec<String> = results
-                    .iter()
-                    .filter(|r| r.result.is_err())
-                    .map(|r| r.signature.clone())
-                    .collect();
-                warn!(
-                    count = failed_sigs.len(),
-                    "retrying failed confirmations"
-                );
-
-                for retry in 0..max_retries {
-                    let retry_results = tx_builder::wait_for_confirmations_batch(
-                        client.clone(),
-                        failed_sigs.clone(),
-                        confirm_timeout,
-                    )
-                    .await;
-
-                    let still_failed: Vec<String> = retry_results
-                        .iter()
-                        .filter(|r| r.result.is_err())
-                        .map(|r| r.signature.clone())
-                        .collect();
-
-                    if still_failed.is_empty() {
-                        info!(retry = retry + 1, "all retried confirmations succeeded");
-                        break;
-                    }
-
-                    if retry == max_retries - 1 {
-                        warn!(
-                            count = still_failed.len(),
-                            "some transactions failed after all retries"
-                        );
-                    }
-                }
-            }
-        }
-
-        // Log failures from airdrop phase
-        if !airdrop_failures.is_empty() {
-            warn!(
-                count = airdrop_failures.len(),
-                chunk = chunk_idx,
-                "airdrop requests failed in chunk"
-            );
-        }
-
-        // Pace between chunks to let mempool drain
-        if chunk_idx + 1 < chunks.len() {
-            tokio::time::sleep(slot_pacing).await;
-        }
+        info!(
+            chunk = chunk_idx,
+            confirmed,
+            failed,
+            "chunk funding complete"
+        );
     }
 
     info!(total, "all accounts funded");

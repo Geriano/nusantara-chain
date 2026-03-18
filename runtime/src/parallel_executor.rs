@@ -76,16 +76,29 @@ pub fn execute_slot_parallel(
         // Safety: the scheduler guarantees no two transactions in the same
         // batch touch the same writable account, so parallel execution with
         // independent snapshots is safe.
-        let results: Vec<(usize, TransactionResult)> = batch
-            .tx_indices
-            .par_iter()
-            .map(|&tx_idx| {
-                let tx = &transactions[tx_idx];
-                let result =
-                    execute_transaction(tx, storage, sysvars, fee_calculator, slot, program_cache);
-                (tx_idx, result)
-            })
-            .collect();
+        //
+        // Block scope ensures immutable borrow of committer (through cache)
+        // ends before the mutable borrow in commit_result().
+        let results: Vec<(usize, TransactionResult)> = {
+            let cache = committer.account_cache();
+            batch
+                .tx_indices
+                .par_iter()
+                .map(|&tx_idx| {
+                    let tx = &transactions[tx_idx];
+                    let result = execute_transaction(
+                        tx,
+                        storage,
+                        sysvars,
+                        fee_calculator,
+                        slot,
+                        program_cache,
+                        Some(cache),
+                    );
+                    (tx_idx, result)
+                })
+                .collect()
+        };
 
         // Sort by original transaction index for deterministic commit order
         let mut sorted_results = results;
@@ -93,9 +106,15 @@ pub fn execute_slot_parallel(
 
         // Commit results in original order (deterministic delta hash)
         for (tx_idx, result) in sorted_results {
-            committer.commit_result(tx_idx, result, slot, storage)?;
+            committer.commit_result(tx_idx, result, slot)?;
         }
+
+        // flush_batch is now a no-op (cache provides cross-batch visibility)
+        committer.flush_batch(storage)?;
     }
+
+    // Single RocksDB write at slot end
+    committer.flush_all(storage)?;
 
     let result = committer.finalize(slot);
 

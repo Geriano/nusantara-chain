@@ -173,10 +173,11 @@ impl Mempool {
                 let worst_key = worst_key.clone();
                 if let Some(evicted) = pool.remove(&worst_key) {
                     dedup.remove(&evicted.tx_hash);
-                    *counts.get_mut(&evicted.payer).unwrap_or(&mut 0) -= 1;
-                    // Clean up zero-count entries
-                    if counts.get(&evicted.payer).copied().unwrap_or(0) == 0 {
-                        counts.remove(&evicted.payer);
+                    if let Some(c) = counts.get_mut(&evicted.payer) {
+                        *c = c.saturating_sub(1);
+                        if *c == 0 {
+                            counts.remove(&evicted.payer);
+                        }
                     }
                     metrics::counter!("nusantara_mempool_evictions").increment(1);
                 }
@@ -246,7 +247,9 @@ impl Mempool {
         let expired_keys: Vec<MempoolKey> = pool
             .iter()
             .filter(|(_, entry)| {
-                !valid_blockhashes.contains(&entry.transaction.message.recent_blockhash)
+                let bh = &entry.transaction.message.recent_blockhash;
+                // Hash::zero() means "no expiry" (used by faucet/testing)
+                *bh != Hash::zero() && !valid_blockhashes.contains(bh)
             })
             .map(|(key, _)| key.clone())
             .collect();

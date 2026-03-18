@@ -3,7 +3,7 @@ use nusantara_core::transaction::Transaction;
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TpuMessage {
-    Transaction(Transaction),
+    Transaction(Box<Transaction>),
     TransactionBatch(Vec<Transaction>),
 }
 
@@ -18,7 +18,7 @@ impl TpuMessage {
 
     pub fn transactions(&self) -> Vec<Transaction> {
         match self {
-            Self::Transaction(tx) => vec![tx.clone()],
+            Self::Transaction(tx) => vec![(**tx).clone()],
             Self::TransactionBatch(txs) => txs.clone(),
         }
     }
@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn single_tx_roundtrip() {
-        let msg = TpuMessage::Transaction(test_tx());
+        let msg = TpuMessage::Transaction(Box::new(test_tx()));
         let bytes = msg.serialize_to_bytes().unwrap();
         let decoded = TpuMessage::deserialize_from_bytes(&bytes).unwrap();
         assert_eq!(msg, decoded);
@@ -61,7 +61,7 @@ mod tests {
     #[test]
     fn transactions_extraction() {
         let tx = test_tx();
-        let msg = TpuMessage::Transaction(tx.clone());
+        let msg = TpuMessage::Transaction(Box::new(tx.clone()));
         assert_eq!(msg.transactions().len(), 1);
 
         let batch = TpuMessage::TransactionBatch(vec![tx.clone(), tx]);

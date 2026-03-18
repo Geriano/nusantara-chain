@@ -69,6 +69,27 @@ pub struct SendTransactionResponse {
     pub status: String,
 }
 
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct SendAndConfirmRequest {
+    /// Base64 URL-safe no-pad encoded borsh-serialized transaction
+    pub transaction: String,
+    /// Timeout in milliseconds (default: 5000, max: 30000)
+    #[serde(default = "default_confirm_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_confirm_timeout_ms() -> u64 {
+    5000
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct SendAndConfirmResponse {
+    pub signature: String,
+    pub slot: u64,
+    pub status: String,
+    pub confirmation_time_ms: u64,
+}
+
 // ── Slot ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -205,4 +226,21 @@ pub struct AirdropRequest {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct AirdropResponse {
     pub signature: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct AirdropAndConfirmRequest {
+    pub address: String,
+    pub lamports: u64,
+    /// Timeout in milliseconds (default: 5000, max: 30000)
+    #[serde(default = "default_confirm_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct AirdropAndConfirmResponse {
+    pub signature: String,
+    pub slot: u64,
+    pub status: String,
+    pub confirmation_time_ms: u64,
 }

@@ -49,6 +49,7 @@ fn full_pipeline_success() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
     assert!(result.status.is_ok());
     assert_eq!(result.fee, 5000);
@@ -88,6 +89,7 @@ fn transaction_status_meta_recording() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
 
     // Manually store the meta as batch_executor would
@@ -138,6 +140,7 @@ fn failure_modes() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
     assert!(result.status.is_err());
     // Fee still charged
@@ -171,6 +174,7 @@ fn address_signature_recording() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
     assert!(result.status.is_ok());
 
@@ -224,6 +228,7 @@ fn blockhash_zero_allowed() {
         &fee_calc,
         1,
         &ProgramCache::new(16),
+        None,
     );
     assert!(result.status.is_ok());
 }

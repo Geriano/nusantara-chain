@@ -38,7 +38,7 @@ async fn main() {
     // --generate-keypair: create a keypair file and exit (no tracing needed)
     if let Some(ref path) = cli.generate_keypair {
         let kp = nusantara_crypto::Keypair::generate();
-        let mut bytes = Vec::with_capacity(1952 + 4032);
+        let mut bytes = Vec::with_capacity(64);
         bytes.extend_from_slice(kp.public_key().as_bytes());
         bytes.extend_from_slice(kp.secret_key().as_bytes());
         std::fs::write(path, &bytes).expect("failed to write keypair file");

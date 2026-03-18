@@ -24,6 +24,9 @@ pub enum RpcError {
 
     #[error("rate limited")]
     RateLimited,
+
+    #[error("request timed out: {0}")]
+    Timeout(String),
 }
 
 #[derive(Serialize)]
@@ -38,6 +41,7 @@ impl IntoResponse for RpcError {
             RpcError::BadRequest(_) => StatusCode::BAD_REQUEST,
             RpcError::FaucetDisabled => StatusCode::SERVICE_UNAVAILABLE,
             RpcError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            RpcError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 

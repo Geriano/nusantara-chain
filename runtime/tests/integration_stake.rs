@@ -89,7 +89,7 @@ fn initialize_delegate_deactivate_withdraw() {
     let sysvars = test_sysvars(5);
 
     let cache = ProgramCache::new(16);
-    let result = execute_transaction(&init_tx, &storage, &sysvars, &fee_calc, 100, &cache);
+    let result = execute_transaction(&init_tx, &storage, &sysvars, &fee_calc, 100, &cache, None);
     assert!(result.status.is_ok(), "init failed: {:?}", result.status);
     commit_deltas(&storage, &result, 100);
 
@@ -104,7 +104,7 @@ fn initialize_delegate_deactivate_withdraw() {
     let mut del_tx = Transaction::new(del_msg);
     del_tx.sign(&[&staker_kp]);
 
-    let result = execute_transaction(&del_tx, &storage, &sysvars, &fee_calc, 101, &cache);
+    let result = execute_transaction(&del_tx, &storage, &sysvars, &fee_calc, 101, &cache, None);
     assert!(
         result.status.is_ok(),
         "delegate failed: {:?}",
@@ -123,7 +123,7 @@ fn initialize_delegate_deactivate_withdraw() {
     let mut deact_tx = Transaction::new(deact_msg);
     deact_tx.sign(&[&staker_kp]);
 
-    let result = execute_transaction(&deact_tx, &storage, &sysvars, &fee_calc, 102, &cache);
+    let result = execute_transaction(&deact_tx, &storage, &sysvars, &fee_calc, 102, &cache, None);
     assert!(
         result.status.is_ok(),
         "deactivate failed: {:?}",
@@ -148,7 +148,7 @@ fn initialize_delegate_deactivate_withdraw() {
     let mut w_tx = Transaction::new(w_msg);
     w_tx.sign(&[&withdrawer_kp]);
 
-    let result = execute_transaction(&w_tx, &storage, &later_sysvars, &fee_calc, 200, &cache);
+    let result = execute_transaction(&w_tx, &storage, &later_sysvars, &fee_calc, 200, &cache, None);
     assert!(
         result.status.is_ok(),
         "withdraw failed: {:?}",
@@ -210,7 +210,7 @@ fn split_stake() {
     let mut init_tx = Transaction::new(init_msg);
     init_tx.sign(&[&stake_acc_kp]);
     let cache = ProgramCache::new(16);
-    let result = execute_transaction(&init_tx, &storage, &sysvars, &fee_calc, 100, &cache);
+    let result = execute_transaction(&init_tx, &storage, &sysvars, &fee_calc, 100, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, &result, 100);
 
@@ -219,7 +219,7 @@ fn split_stake() {
     let split_msg = Message::new(&[split_ix], &staker).unwrap();
     let mut split_tx = Transaction::new(split_msg);
     split_tx.sign(&[&staker_kp]);
-    let result = execute_transaction(&split_tx, &storage, &sysvars, &fee_calc, 101, &cache);
+    let result = execute_transaction(&split_tx, &storage, &sysvars, &fee_calc, 101, &cache, None);
     assert!(result.status.is_ok(), "split failed: {:?}", result.status);
     commit_deltas(&storage, &result, 101);
 

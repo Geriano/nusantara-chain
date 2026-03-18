@@ -10,11 +10,11 @@ pub struct BenchConfig {
     pub rpc_urls: Vec<String>,
 
     /// Number of accounts to generate and fund.
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 100)]
     pub num_accounts: usize,
 
     /// Total number of transactions to send.
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = 5000)]
     pub tx_count: usize,
 
     /// Number of concurrent sender tasks (0 = auto-compute based on num_accounts).
@@ -63,7 +63,7 @@ impl BenchConfig {
     /// When `num_senders == 0`, auto-scales based on `num_accounts`.
     pub fn effective_num_senders(&self) -> usize {
         if self.num_senders == 0 {
-            (self.num_accounts / 100).clamp(4, 64)
+            (self.num_accounts / 10).clamp(4, 64)
         } else {
             self.num_senders
         }

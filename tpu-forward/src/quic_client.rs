@@ -26,7 +26,7 @@ impl TpuQuicClient {
         addr: SocketAddr,
         tx: &Transaction,
     ) -> Result<(), TpuError> {
-        let msg = TpuMessage::Transaction(tx.clone());
+        let msg = TpuMessage::Transaction(Box::new(tx.clone()));
         self.send_message(addr, &msg).await
     }
 

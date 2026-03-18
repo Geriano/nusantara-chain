@@ -64,12 +64,16 @@ impl ValidatorNode {
                     self.process_orphan_queue()?;
                     self.check_epoch_boundary(cli.snapshot_interval).await;
 
-                    // Periodically expire mempool transactions with stale blockhashes
+                    // Periodically expire mempool transactions with stale blockhashes.
+                    // Use best_slot() (not current_slot) because current_slot may be a
+                    // non-leader slot that isn't in the fork tree, which would produce
+                    // an empty ancestry and incorrectly purge the entire mempool.
                     if self.current_slot.is_multiple_of(10) {
+                        let best = self.replay_stage.fork_tree().best_slot();
                         let ancestry = self
                             .replay_stage
                             .fork_tree()
-                            .get_ancestry(self.current_slot);
+                            .get_ancestry(best);
                         let valid_blockhashes: HashSet<Hash> = ancestry
                             .iter()
                             .filter_map(|&s| {
@@ -228,31 +232,54 @@ impl ValidatorNode {
             .collect();
         self.bank.set_slot_hashes(SlotHashes(fork_slot_hashes));
 
-        // Fork-aware account index rewind
-        let ancestor_set: HashSet<u64> = ancestry.iter().copied().collect();
-        let rewound = self
-            .storage
-            .rewind_account_index_for_ancestry(&ancestor_set)?;
-        if rewound > 0 {
-            tracing::info!(
-                parent_slot,
-                rewound,
-                "rewound account index (fork-aware) before production"
-            );
+        // Fork-aware account index rewind — skip when extending a linear chain
+        // (parent is the slot we produced last time, meaning no fork switch).
+        let is_linear_extension = self.last_produced_parent == Some(parent_slot);
+        if !is_linear_extension {
+            let ancestor_set: HashSet<u64> = ancestry.iter().copied().collect();
+            let rewound = self
+                .storage
+                .rewind_account_index_for_ancestry(&ancestor_set)?;
+            if rewound > 0 {
+                tracing::info!(
+                    parent_slot,
+                    rewound,
+                    "rewound account index (fork-aware) before production"
+                );
+            }
         }
 
         // 3b. Drain pending transactions from the priority mempool
         let transactions = self.mempool.drain_by_priority(2048);
 
         // 4. Produce block
-        let block = self
+        let (block, exec_result, pending_storage) = self
             .block_producer
             .produce_block(self.current_slot, transactions)?;
 
         // Mark our own block as stored
         self.shred_collector.mark_slot_stored(self.current_slot);
 
-        // 5. Feed into ReplayStage for fork tree tracking
+        // 5. Async block storage — put_block, put_slot_meta, flush_to_storage
+        //    offloaded to a background thread so they don't block the slot loop.
+        {
+            let storage = self.storage.clone();
+            let bank = Arc::clone(&self.bank);
+            let block_for_storage = block.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = storage.put_block(&block_for_storage) {
+                    tracing::warn!(error = %e, "async put_block failed");
+                }
+                if let Err(e) = storage.put_slot_meta(&pending_storage.slot_meta) {
+                    tracing::warn!(error = %e, "async put_slot_meta failed");
+                }
+                if let Err(e) = bank.flush_to_storage(&pending_storage.frozen) {
+                    tracing::warn!(error = %e, "async flush_to_storage failed");
+                }
+            });
+        }
+
+        // 6. Feed into ReplayStage for fork tree tracking
         let result = self.replay_stage.replay_block(&block, &[])?;
 
         // Defer root advancement
@@ -260,33 +287,9 @@ impl ValidatorNode {
             self.try_advance_root(root)?;
         }
 
-        // 4. Build TurbineTree and broadcast
-        let mut peers: Vec<Hash> = self
-            .cluster_info
-            .all_peers()
-            .iter()
-            .map(|ci| ci.identity)
-            .collect();
-        if !peers.contains(&self.identity) {
-            peers.push(self.identity);
-        }
-        let stakes_vec = self.bank.get_stake_distribution();
-        let stakes: std::collections::HashMap<Hash, u64> = stakes_vec.into_iter().collect();
-        let tree = TurbineTree::new(
-            self.identity,
-            &peers,
-            &stakes,
-            self.current_slot,
-            TURBINE_FANOUT as usize,
-        );
-        let ci = Arc::clone(&self.cluster_info);
-        broadcast
-            .broadcast_block(&block, &tree, |id| {
-                ci.get_contact_info(id).map(|c| c.turbine_addr.0)
-            })
-            .await?;
-
-        // 5. Publish pubsub events for WebSocket subscribers
+        // 7. Publish pubsub events immediately after replay (before broadcast)
+        //    so that send-and-confirm / airdrop-and-confirm endpoints get notified
+        //    without waiting for Turbine shredding and network I/O.
         let root = self.storage.get_latest_root().unwrap_or(None).unwrap_or(0);
         if let Err(e) = self.pubsub_tx.send(PubsubEvent::SlotUpdate {
             slot: self.current_slot,
@@ -303,25 +306,57 @@ impl ValidatorNode {
             tracing::debug!(error = %e, "pubsub BlockNotification send failed (no subscribers)");
         }
 
-        // Publish SignatureNotification for each transaction in the block
-        for tx in &block.transactions {
-            let tx_hash = tx.hash();
+        // Publish SignatureNotification using inline tx_statuses (no RocksDB reads)
+        for (tx_hash, status_str) in &exec_result.tx_statuses {
             let sig_b64 = tx_hash.to_base64();
-            let status_str = match self.storage.get_transaction_status(&tx_hash) {
-                Ok(Some(meta)) => match &meta.status {
-                    nusantara_storage::TransactionStatus::Success => "success".to_string(),
-                    nusantara_storage::TransactionStatus::Failed(msg) => {
-                        format!("failed: {msg}")
-                    }
-                },
-                _ => "success".to_string(),
-            };
             let _ = self.pubsub_tx.send(PubsubEvent::SignatureNotification {
                 signature: sig_b64,
                 slot: self.current_slot,
-                status: status_str,
+                status: status_str.clone(),
             });
         }
+
+        // 8. Build TurbineTree and broadcast in background (after notifications)
+        {
+            let block_for_broadcast = block.clone();
+            let identity = self.identity;
+            let ci = Arc::clone(&self.cluster_info);
+            let bank = Arc::clone(&self.bank);
+            let current_slot = self.current_slot;
+            let broadcast = broadcast.clone();
+            tokio::spawn(async move {
+                let mut peers: Vec<Hash> = ci
+                    .all_peers()
+                    .iter()
+                    .map(|ci| ci.identity)
+                    .collect();
+                if !peers.contains(&identity) {
+                    peers.push(identity);
+                }
+                let stakes_vec = bank.get_stake_distribution();
+                let stakes: std::collections::HashMap<Hash, u64> =
+                    stakes_vec.into_iter().collect();
+                let tree = TurbineTree::new(
+                    identity,
+                    &peers,
+                    &stakes,
+                    current_slot,
+                    TURBINE_FANOUT as usize,
+                );
+                let ci2 = ci.clone();
+                if let Err(e) = broadcast
+                    .broadcast_block(&block_for_broadcast, &tree, |id| {
+                        ci2.get_contact_info(id).map(|c| c.turbine_addr.0)
+                    })
+                    .await
+                {
+                    tracing::warn!(error = %e, slot = current_slot, "background broadcast failed");
+                }
+            });
+        }
+
+        // Track parent for linear-extension detection (skip rewind next slot)
+        self.last_produced_parent = Some(self.current_slot);
 
         metrics::counter!("nusantara_leader_slots").increment(1);
         info!(

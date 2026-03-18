@@ -74,7 +74,7 @@ fn initialize_vote_cast_authorize_withdraw() {
     init_tx.sign(&[&vote_acc_kp]);
 
     let cache = ProgramCache::new(16);
-    let result = execute_transaction(&init_tx, &storage, &sysvars, &fee_calc, 100, &cache);
+    let result = execute_transaction(&init_tx, &storage, &sysvars, &fee_calc, 100, &cache, None);
     assert!(result.status.is_ok(), "init failed: {:?}", result.status);
     commit_deltas(&storage, &result, 100);
 
@@ -95,7 +95,7 @@ fn initialize_vote_cast_authorize_withdraw() {
     let mut vote_tx = Transaction::new(vote_msg);
     vote_tx.sign(&[&voter_kp]);
 
-    let result = execute_transaction(&vote_tx, &storage, &sysvars, &fee_calc, 101, &cache);
+    let result = execute_transaction(&vote_tx, &storage, &sysvars, &fee_calc, 101, &cache, None);
     assert!(result.status.is_ok(), "vote failed: {:?}", result.status);
     commit_deltas(&storage, &result, 101);
 
@@ -111,7 +111,7 @@ fn initialize_vote_cast_authorize_withdraw() {
     let mut auth_tx = Transaction::new(auth_msg);
     auth_tx.sign(&[&voter_kp]);
 
-    let result = execute_transaction(&auth_tx, &storage, &sysvars, &fee_calc, 102, &cache);
+    let result = execute_transaction(&auth_tx, &storage, &sysvars, &fee_calc, 102, &cache, None);
     assert!(result.status.is_ok(), "auth failed: {:?}", result.status);
     commit_deltas(&storage, &result, 102);
 
@@ -126,7 +126,7 @@ fn initialize_vote_cast_authorize_withdraw() {
     let mut w_tx = Transaction::new(w_msg);
     w_tx.sign(&[&withdrawer_kp]);
 
-    let result = execute_transaction(&w_tx, &storage, &sysvars, &fee_calc, 103, &cache);
+    let result = execute_transaction(&w_tx, &storage, &sysvars, &fee_calc, 103, &cache, None);
     assert!(
         result.status.is_ok(),
         "withdraw failed: {:?}",

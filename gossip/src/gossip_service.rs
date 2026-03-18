@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(PUSH_INTERVAL_MS, 100);
         assert_eq!(PULL_INTERVAL_MS, 5000);
         assert_eq!(PURGE_TIMEOUT_MS, 30000);
-        assert_eq!(RECV_RATE_LIMIT_PER_IP_PER_SEC, 100);
+        assert_eq!(RECV_RATE_LIMIT_PER_IP_PER_SEC, 10240);
     }
 
     #[test]

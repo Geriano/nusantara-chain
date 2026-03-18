@@ -16,7 +16,7 @@ rustc --version   # must be >= 1.93
 
 ### System Dependencies
 
-Nusantara depends on RocksDB and post-quantum cryptography libraries that require a C/C++ compiler, CMake, and pkg-config.
+Nusantara depends on RocksDB and cryptography libraries that require a C/C++ compiler, CMake, and pkg-config.
 
 **macOS (Homebrew):**
 

@@ -1,6 +1,6 @@
 [package]
 name = "nusantara-crypto"
-description = "Post-quantum cryptographic library for the Nusantara blockchain"
+description = "Cryptographic library for the Nusantara blockchain"
 version.workspace = true
 edition.workspace = true
 
@@ -11,7 +11,6 @@ pqcrypto-traits.workspace = true
 base64.workspace = true
 borsh.workspace = true
 thiserror.workspace = true
-rand.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

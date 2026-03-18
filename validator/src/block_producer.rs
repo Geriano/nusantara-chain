@@ -6,13 +6,20 @@ use nusantara_consensus::poh::PohRecorder;
 use nusantara_core::{Block, BlockHeader, EpochSchedule, FeeCalculator, Transaction};
 use nusantara_crypto::{Hash, hashv};
 use nusantara_rent_program::Rent;
-use nusantara_runtime::{ProgramCache, execute_slot_parallel};
+use nusantara_runtime::{ProgramCache, SlotExecutionResult, execute_slot_parallel};
 use nusantara_storage::{SlotMeta, Storage};
 use tracing::{info, instrument};
 
-use crate::helpers;
+use nusantara_consensus::bank::FrozenBankState;
 
+use crate::helpers;
 use crate::error::ValidatorError;
+
+/// Deferred block storage operations that can run in the background.
+pub struct PendingBlockStorage {
+    pub slot_meta: SlotMeta,
+    pub frozen: FrozenBankState,
+}
 
 pub struct BlockProducer {
     identity_address: Hash,
@@ -42,12 +49,13 @@ impl BlockProducer {
         parent_hash: Hash,
         parent_bank_hash: Hash,
         program_cache: Arc<ProgramCache>,
+        hashes_per_tick: u64,
     ) -> Self {
         Self {
             identity_address,
             storage,
             bank,
-            poh: PohRecorder::new(initial_poh_hash),
+            poh: PohRecorder::with_hashes_per_tick(initial_poh_hash, hashes_per_tick),
             epoch_schedule,
             fee_calculator,
             rent,
@@ -63,7 +71,7 @@ impl BlockProducer {
         &mut self,
         slot: u64,
         transactions: Vec<Transaction>,
-    ) -> Result<Block, ValidatorError> {
+    ) -> Result<(Block, SlotExecutionResult, PendingBlockStorage), ValidatorError> {
         let start = Instant::now();
 
         let timestamp = helpers::unix_timestamp_secs();
@@ -135,10 +143,7 @@ impl BlockProducer {
             transactions,
         };
 
-        // 11. Store block
-        self.storage.put_block(&block)?;
-
-        // 12. Store slot metadata
+        // 11. Prepare pending block storage (deferred to async background)
         let slot_meta = SlotMeta {
             slot,
             parent_slot: self.parent_slot,
@@ -148,17 +153,12 @@ impl BlockProducer {
             is_connected: true,
             completed: true,
         };
-        self.storage.put_slot_meta(&slot_meta)?;
+        let pending_storage = PendingBlockStorage { slot_meta, frozen: frozen.clone() };
 
-        // 13. Update consensus bank
+        // 12. Update consensus bank (in-memory only, fast)
         self.bank.record_slot_hash(slot, block_hash);
 
-        // 14. Persist frozen bank state
-        self.bank.flush_to_storage(&frozen)?;
-
-        // 15. Root advancement handled by Tower BFT via ReplayStage
-
-        // 16. Update parent pointers and reset PoH
+        // 13. Update parent pointers and reset PoH
         self.parent_slot = slot;
         self.parent_hash = block_hash;
         self.parent_bank_hash = frozen.bank_hash;
@@ -185,7 +185,7 @@ impl BlockProducer {
             "block produced"
         );
 
-        Ok(block)
+        Ok((block, exec_result, pending_storage))
     }
 
     /// Update parent pointers after replaying a network-received block.

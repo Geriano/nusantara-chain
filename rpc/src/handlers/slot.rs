@@ -41,9 +41,15 @@ pub async fn get_blockhash(
     metrics::counter!("nusantara_rpc_requests", "endpoint" => "blockhash").increment(1);
 
     let slot_hashes = state.bank.slot_hashes();
+
+    // Use a blockhash a few slots behind the tip: close enough to the tip
+    // for long validity (won't be pruned as root advances), but deep enough
+    // to have propagated to all validators via Turbine (~1-2 slots).
+    let depth = slot_hashes.0.len().clamp(1, 5) - 1;
     let (slot, hash) = slot_hashes
         .0
-        .first()
+        .get(depth)
+        .or(slot_hashes.0.first())
         .ok_or_else(|| RpcError::Internal("no slot hashes available".to_string()))?;
 
     Ok(Json(BlockhashResponse {

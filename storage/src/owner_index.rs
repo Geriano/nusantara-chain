@@ -23,7 +23,17 @@ impl Storage {
         new_account: &Account,
     ) -> StorageWriteBatch {
         let mut batch = StorageWriteBatch::new();
+        Self::write_index_updates(&mut batch, address, old_account, new_account);
+        batch
+    }
 
+    /// Append owner/program index updates directly into the caller's batch.
+    pub(crate) fn write_index_updates(
+        batch: &mut StorageWriteBatch,
+        address: &Hash,
+        old_account: Option<&Account>,
+        new_account: &Account,
+    ) {
         let new_owner = &new_account.owner;
         let owner_changed = old_account.is_none_or(|old| old.owner != *new_owner);
 
@@ -37,8 +47,6 @@ impl Storage {
             batch.put(CF_OWNER_INDEX, new_key.to_vec(), Vec::new());
             batch.put(CF_PROGRAM_INDEX, new_key.to_vec(), Vec::new());
         }
-
-        batch
     }
 
     /// Atomically update the owner and program indexes when an account is

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use nusantara_core::Account;
 use nusantara_crypto::Hash;
 use nusantara_storage::Storage;
@@ -15,14 +17,20 @@ pub fn load_accounts(
     storage: &Storage,
     account_keys: &[Hash],
     loaded_accounts_data_size_limit: u32,
+    account_cache: Option<&HashMap<Hash, Account>>,
 ) -> Result<LoadedAccounts, RuntimeError> {
     let mut accounts = Vec::with_capacity(account_keys.len());
     let mut total_data_size = 0u64;
 
     for address in account_keys {
-        let account = storage
-            .get_account(address)?
-            .unwrap_or_else(|| Account::new(0, Hash::zero()));
+        // Check in-memory cache first, fall back to RocksDB
+        let account = if let Some(cached) = account_cache.and_then(|c| c.get(address)) {
+            cached.clone()
+        } else {
+            storage
+                .get_account(address)?
+                .unwrap_or_else(|| Account::new(0, Hash::zero()))
+        };
 
         total_data_size += account.data.len() as u64;
         if total_data_size > loaded_accounts_data_size_limit as u64 {
@@ -60,7 +68,7 @@ mod tests {
         let account = Account::new(1000, hash(b"system"));
         storage.put_account(&addr, 0, &account).unwrap();
 
-        let loaded = load_accounts(&storage, &[addr], u32::MAX).unwrap();
+        let loaded = load_accounts(&storage, &[addr], u32::MAX, None).unwrap();
         assert_eq!(loaded.accounts.len(), 1);
         assert_eq!(loaded.accounts[0].1.lamports, 1000);
     }
@@ -70,7 +78,7 @@ mod tests {
         let (storage, _dir) = temp_storage();
         let addr = hash(b"missing");
 
-        let loaded = load_accounts(&storage, &[addr], u32::MAX).unwrap();
+        let loaded = load_accounts(&storage, &[addr], u32::MAX, None).unwrap();
         assert_eq!(loaded.accounts.len(), 1);
         assert_eq!(loaded.accounts[0].1.lamports, 0);
         assert_eq!(loaded.accounts[0].1.owner, Hash::zero());
@@ -84,7 +92,7 @@ mod tests {
         account.data = vec![0u8; 100];
         storage.put_account(&addr, 0, &account).unwrap();
 
-        let loaded = load_accounts(&storage, &[addr], 200).unwrap();
+        let loaded = load_accounts(&storage, &[addr], 200, None).unwrap();
         assert_eq!(loaded.total_data_size, 100);
     }
 
@@ -96,7 +104,7 @@ mod tests {
         account.data = vec![0u8; 500];
         storage.put_account(&addr, 0, &account).unwrap();
 
-        let err = load_accounts(&storage, &[addr], 100).unwrap_err();
+        let err = load_accounts(&storage, &[addr], 100, None).unwrap_err();
         assert!(matches!(
             err,
             RuntimeError::LoadedAccountsDataSizeExceeded { .. }
@@ -111,7 +119,7 @@ mod tests {
         let account = Account::new(500, hash(b"system"));
         storage.put_account(&addr1, 0, &account).unwrap();
 
-        let loaded = load_accounts(&storage, &[addr1, addr2], u32::MAX).unwrap();
+        let loaded = load_accounts(&storage, &[addr1, addr2], u32::MAX, None).unwrap();
         assert_eq!(loaded.accounts.len(), 2);
         assert_eq!(loaded.accounts[0].1.lamports, 500);
         assert_eq!(loaded.accounts[1].1.lamports, 0);

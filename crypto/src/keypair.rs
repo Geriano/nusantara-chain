@@ -41,10 +41,9 @@ pub struct Keypair {
 impl Keypair {
     pub fn generate() -> Self {
         let (pq_pk, pq_sk) = dilithium3::keypair();
-        Self {
-            public: PublicKey::from_pq(&pq_pk),
-            secret: SecretKey(pq_sk.as_bytes().to_vec()),
-        }
+        let public = PublicKey::from_pq(&pq_pk);
+        let secret = SecretKey(pqcrypto_traits::sign::SecretKey::as_bytes(&pq_sk).to_vec());
+        Self { public, secret }
     }
 
     pub fn from_bytes(pubkey_bytes: &[u8], secret_bytes: &[u8]) -> Result<Self, CryptoError> {
@@ -70,9 +69,9 @@ impl Keypair {
     }
 
     pub fn sign(&self, message: &[u8]) -> Signature {
-        let pq_sk = self.secret.to_pq().expect("keypair holds valid secret key");
-        let pq_sig = dilithium3::detached_sign(message, &pq_sk);
-        Signature::from_pq(&pq_sig)
+        let pq_sk = self.secret.to_pq().expect("secret key was validated on creation");
+        let sig = dilithium3::detached_sign(message, &pq_sk);
+        Signature::from_pq(&sig)
     }
 }
 

@@ -41,6 +41,9 @@ pub struct ConsensusBank {
     /// Incremental Merkle tree over all account state.
     /// Protected by a `Mutex` (not held across `.await` points).
     pub(crate) state_tree: Mutex<StateTree>,
+    /// Cached stake distribution vec, updated atomically when epoch stakes change.
+    /// Avoids cloning HashMap -> Vec on every leader check and TurbineTree build.
+    pub(crate) cached_stake_vec: RwLock<Arc<Vec<(Hash, u64)>>>,
 }
 
 impl ConsensusBank {
@@ -59,6 +62,7 @@ impl ConsensusBank {
             current_slot: RwLock::new(0),
             slash_registry: DashMap::new(),
             state_tree: Mutex::new(StateTree::new()),
+            cached_stake_vec: RwLock::new(Arc::new(Vec::new())),
         }
     }
 

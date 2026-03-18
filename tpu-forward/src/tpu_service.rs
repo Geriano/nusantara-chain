@@ -100,7 +100,7 @@ impl TpuService {
     }
 }
 
-/// Skip TLS certificate verification (we do Dilithium identity verification at app layer).
+/// Skip TLS certificate verification (we do Dilithium3 identity verification at app layer).
 #[derive(Debug)]
 struct SkipServerVerification;
 

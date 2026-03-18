@@ -227,6 +227,9 @@ impl ValidatorNode {
         let program_cache = Arc::new(ProgramCache::new(crate::constants::PROGRAM_CACHE_SIZE));
 
         // 12. Create BlockProducer
+        let hashes_per_tick = cli
+            .hashes_per_tick
+            .unwrap_or(nusantara_consensus::poh::HASHES_PER_TICK);
         let block_producer = BlockProducer::new(
             identity_address,
             Arc::clone(&storage),
@@ -239,6 +242,7 @@ impl ValidatorNode {
             parent_hash,
             parent_bank_hash,
             Arc::clone(&program_cache),
+            hashes_per_tick,
         );
 
         // 12. Create mempool
@@ -426,6 +430,7 @@ impl ValidatorNode {
             snapshot_dir: Path::new(&cli.ledger_path).join("snapshots"),
             failed_fork_targets: HashSet::new(),
             last_voted_slot: current_slot,
+            last_produced_parent: None,
         })
     }
 }

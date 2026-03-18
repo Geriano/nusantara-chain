@@ -1,15 +1,14 @@
 # nusantara-crypto
 
-Post-quantum cryptographic library for the Nusantara blockchain.
+Cryptographic library for the Nusantara blockchain.
 
 ## Features
 
 - **SHA3-512** hashing (64-byte output) for maximum collision resistance
-- **Dilithium3 (ML-DSA-65)** post-quantum digital signatures (NIST FIPS 204)
+- **Dilithium3** post-quantum digital signatures via `pqcrypto-dilithium` (CRYSTALS-Dilithium, NIST Level 3)
 - **NEAR-like account IDs** with `.nusantara` suffix
 - **Base64 URL-safe** encoding (no padding) for all user-facing data
 - **Merkle trees** with domain separation and proof generation/verification
-- **bitcode** serialization via serde compatibility (`bitcode::serde`)
 
 ## Size Reference
 
@@ -79,33 +78,13 @@ let proof = tree.proof(3).unwrap();
 assert!(proof.verify(&leaves[3], &tree.root()));
 ```
 
-### Serialization
-
-```rust
-use nusantara_crypto::hash;
-
-let h = hash(b"data");
-
-// JSON (human-readable) - uses base64url strings
-let json = serde_json::to_string(&h).unwrap();
-
-// bitcode (binary) - via serde compatibility
-let bytes = bitcode::serialize(&h).unwrap();
-let decoded: nusantara_crypto::Hash = bitcode::deserialize(&bytes).unwrap();
-```
-
 ## Encoding
 
 All user-facing data uses **Base64 URL-safe encoding without padding** (RFC 4648 section 5).
 This means no `+`, `/`, or `=` characters appear in encoded output.
 
-## Post-Quantum Signatures
+## Dilithium3 Signatures
 
-This crate uses Dilithium3 (ML-DSA-65) from the NIST FIPS 204 standard via the
-`pqcrypto` crate family. Dilithium3 offers the best balance of security level,
-signature size, and verification speed among NIST post-quantum signature candidates.
-
-## Build Requirements
-
-This crate depends on `pqcrypto-dilithium` which uses C FFI bindings (PQClean).
-A C compiler (`cc`) is required at build time.
+This crate uses CRYSTALS-Dilithium (Dilithium3, NIST Level 3) post-quantum signatures
+via the `pqcrypto-dilithium` crate. Dilithium3 provides strong post-quantum security
+with 1,952-byte public keys, 4,032-byte secret keys, and 3,309-byte signatures.

@@ -22,26 +22,64 @@ impl Storage {
         slot: u64,
         account: &Account,
     ) -> Result<(), StorageError> {
-        // Read the old account before writing so we can detect owner changes
-        // and update the owner/program indexes correctly.
-        let old_account = self.get_account(address)?;
+        let batch = self.prepare_account_write(address, slot, account)?;
+        self.write(&batch)?;
+        Ok(())
+    }
 
-        let value = borsh::to_vec(account).map_err(|e| StorageError::Serialization(e.to_string()))?;
-
+    /// Prepare account write operations into a `StorageWriteBatch` WITHOUT committing.
+    /// Returns a batch with CF_ACCOUNTS + CF_ACCOUNT_INDEX + owner/program index updates.
+    /// The caller can merge this into a larger batch for amortized commits.
+    pub fn prepare_account_write(
+        &self,
+        address: &Hash,
+        slot: u64,
+        account: &Account,
+    ) -> Result<StorageWriteBatch, StorageError> {
         let mut batch = StorageWriteBatch::new();
+        self.append_account_write(&mut batch, address, slot, account)?;
+        Ok(batch)
+    }
+
+    /// Append account write operations directly into the caller's batch.
+    /// Reads the old account from storage for owner index tracking.
+    pub fn append_account_write(
+        &self,
+        batch: &mut StorageWriteBatch,
+        address: &Hash,
+        slot: u64,
+        account: &Account,
+    ) -> Result<(), StorageError> {
+        let old_account = self.get_account(address)?;
+        Self::write_account_to_batch(batch, address, slot, account, old_account.as_ref());
+        Ok(())
+    }
+
+    /// Append account write operations using a caller-provided old account state,
+    /// skipping the redundant `get_account()` RocksDB read.
+    pub fn append_account_write_with_old(
+        batch: &mut StorageWriteBatch,
+        address: &Hash,
+        slot: u64,
+        account: &Account,
+        old_account: Option<&Account>,
+    ) {
+        Self::write_account_to_batch(batch, address, slot, account, old_account);
+    }
+
+    /// Shared logic: serialize account and append CF_ACCOUNTS + CF_ACCOUNT_INDEX + index updates.
+    fn write_account_to_batch(
+        batch: &mut StorageWriteBatch,
+        address: &Hash,
+        slot: u64,
+        account: &Account,
+        old_account: Option<&Account>,
+    ) {
+        let value = borsh::to_vec(account).expect("account serialization cannot fail");
         batch.put(CF_ACCOUNTS, account_key(address, slot).to_vec(), value);
         batch.put(CF_ACCOUNT_INDEX, address.as_bytes().to_vec(), slot_key(slot).to_vec());
 
-        // Merge owner/program index updates into same batch for atomicity
-        let index_batch = self.prepare_index_updates(address, old_account.as_ref(), account);
-        batch.merge(&index_batch);
-
-        self.write(&batch)?;
-        if !index_batch.is_empty() {
-            metrics::counter!("nusantara_storage_owner_index_updates").increment(1);
-        }
-
-        Ok(())
+        Self::write_index_updates(batch, address, old_account, account);
     }
 
     /// Get the latest version of an account.

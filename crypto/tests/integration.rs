@@ -143,7 +143,7 @@ fn borsh_roundtrip() {
     // PublicKey
     let encoded = borsh::to_vec(kp.public_key()).unwrap();
     let decoded: PublicKey = borsh::from_slice(&encoded).unwrap();
-    assert_eq!(*kp.public_key(), decoded);
+    assert_eq!(kp.public_key().clone(), decoded);
 
     // Signature
     let encoded = borsh::to_vec(&sig).unwrap();
@@ -228,7 +228,7 @@ fn pubkey_base64_display_fromstr_roundtrip() {
     let pk = kp.public_key();
     let s = pk.to_string();
     let parsed: PublicKey = s.parse().unwrap();
-    assert_eq!(*pk, parsed);
+    assert_eq!(pk.clone(), parsed);
 }
 
 #[test]

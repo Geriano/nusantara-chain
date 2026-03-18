@@ -48,6 +48,7 @@ fn bench_single_transfer(c: &mut Criterion) {
                 &fee_calc,
                 1,
                 &ProgramCache::new(16),
+                None,
             );
         })
     });
@@ -84,6 +85,7 @@ fn bench_single_create_account(c: &mut Criterion) {
                 &fee_calc,
                 1,
                 &ProgramCache::new(16),
+                None,
             );
         })
     });
@@ -121,7 +123,7 @@ fn bench_account_loading(c: &mut Criterion) {
 
     c.bench_function("account_loading_10", |b| {
         b.iter(|| {
-            load_accounts(&storage, &keys, u32::MAX).unwrap();
+            load_accounts(&storage, &keys, u32::MAX, None).unwrap();
         })
     });
 }

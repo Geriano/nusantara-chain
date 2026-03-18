@@ -66,7 +66,8 @@ pub(crate) fn load_keypair_from_path(path: &str) -> Result<Keypair, ValidatorErr
             bytes.len()
         )));
     }
-    Keypair::from_bytes(&bytes[..1952], &bytes[1952..])
+    let split = nusantara_crypto::pubkey::PUBLIC_KEY_BYTES;
+    Keypair::from_bytes(&bytes[..split], &bytes[split..])
         .map_err(|e| ValidatorError::Keypair(format!("invalid keypair: {e}")))
 }
 

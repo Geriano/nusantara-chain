@@ -66,7 +66,7 @@ maintains a consistent view of the cluster.
 
 **CrdsTable** stores all values in a `DashMap<CrdsValueLabel, CrdsEntry>` with a
 monotonic insert cursor. Each entry is a `CrdsValue` containing `CrdsData` plus
-a Dilithium `Signature` from the originating validator.
+a Dilithium3 `Signature` from the originating validator.
 
 ### Push Protocol
 
@@ -169,7 +169,7 @@ Split into 1,228-byte chunks --> DataShred[]
 FEC encode in groups of 32 --> CodeShred[] (33% redundancy)
   |
   v
-Sign each shred with leader's Dilithium key --> SignedDataShred / SignedCodeShred
+Sign each shred with leader's Dilithium3 key --> SignedDataShred / SignedCodeShred
 ```
 
 1. The block is serialized with Borsh.
@@ -179,7 +179,7 @@ Sign each shred with leader's Dilithium key --> SignedDataShred / SignedCodeShre
    with **33% redundancy** (galois_8 backend), producing `CodeShred` parity
    shreds.
 4. Every shred is signed by the leader: `SignedShred = DataShred/CodeShred +
-   leader Hash + Dilithium Signature`.
+   leader Hash + Dilithium3 Signature`.
 
 ### Turbine Tree
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use nusantara_core::{Account, FeeCalculator, Transaction};
 use nusantara_crypto::Hash;
 use nusantara_storage::Storage;
@@ -19,6 +21,10 @@ pub struct TransactionResult {
     pub account_deltas: Vec<(Hash, Account)>,
     pub pre_balances: Vec<u64>,
     pub post_balances: Vec<u64>,
+    /// Pre-execution account states (as loaded from storage).
+    /// Used during commit to skip redundant `get_account()` RocksDB reads
+    /// for owner index tracking.
+    pub loaded_accounts: Vec<(Hash, Account)>,
 }
 
 #[instrument(skip_all, fields(slot = slot))]
@@ -29,6 +35,7 @@ pub fn execute_transaction(
     fee_calculator: &FeeCalculator,
     slot: u64,
     program_cache: &ProgramCache,
+    account_cache: Option<&HashMap<Hash, Account>>,
 ) -> TransactionResult {
     // Step 1: Compute hash
     let tx_hash = tx.hash();
@@ -43,6 +50,7 @@ pub fn execute_transaction(
             account_deltas: vec![],
             pre_balances: vec![],
             post_balances: vec![],
+            loaded_accounts: vec![],
         };
     }
 
@@ -58,6 +66,7 @@ pub fn execute_transaction(
                 account_deltas: vec![],
                 pre_balances: vec![],
                 post_balances: vec![],
+                loaded_accounts: vec![],
             };
         }
     };
@@ -65,11 +74,12 @@ pub fn execute_transaction(
     // Step 3: Calculate fee
     let fee = fee_calculator.calculate_fee(tx.message.num_required_signatures as u64);
 
-    // Step 4: Load accounts
+    // Step 4: Load accounts (cache-first, fallback to RocksDB)
     let loaded = match load_accounts(
         storage,
         &tx.message.account_keys,
         compute_budget.loaded_accounts_data_size_limit,
+        account_cache,
     ) {
         Ok(l) => l,
         Err(e) => {
@@ -81,9 +91,14 @@ pub fn execute_transaction(
                 account_deltas: vec![],
                 pre_balances: vec![],
                 post_balances: vec![],
+                loaded_accounts: vec![],
             };
         }
     };
+
+    // Capture pre-execution account states for owner index tracking during commit.
+    // This eliminates redundant get_account() RocksDB reads in the commit phase.
+    let loaded_accounts = loaded.accounts.clone();
 
     let pre_balances: Vec<u64> = loaded.accounts.iter().map(|(_, a)| a.lamports).collect();
 
@@ -101,6 +116,7 @@ pub fn execute_transaction(
             account_deltas: vec![],
             pre_balances: pre_balances.clone(),
             post_balances: pre_balances,
+            loaded_accounts,
         };
     }
     fee_accounts[0].1.lamports -= fee;
@@ -108,9 +124,7 @@ pub fn execute_transaction(
     // Step 6: Verify recent blockhash
     // Allow Hash::zero() for genesis/testing
     if tx.message.recent_blockhash != Hash::zero()
-        && !sysvars
-            .recent_blockhashes()
-            .contains(&tx.message.recent_blockhash)
+        && !sysvars.contains_blockhash(&tx.message.recent_blockhash)
     {
         // Fee is still collected, return fee-only delta
         let post_balances: Vec<u64> = fee_accounts.iter().map(|(_, a)| a.lamports).collect();
@@ -123,6 +137,7 @@ pub fn execute_transaction(
             account_deltas: payer_delta,
             pre_balances,
             post_balances,
+            loaded_accounts,
         };
     }
 
@@ -148,6 +163,7 @@ pub fn execute_transaction(
             account_deltas: payer_delta,
             pre_balances,
             post_balances,
+            loaded_accounts,
         };
     }
 
@@ -173,6 +189,7 @@ pub fn execute_transaction(
                     account_deltas: payer_delta,
                     pre_balances,
                     post_balances,
+                    loaded_accounts,
                 };
             }
 
@@ -188,6 +205,7 @@ pub fn execute_transaction(
                 account_deltas: deltas,
                 pre_balances,
                 post_balances,
+                loaded_accounts,
             }
         }
         Err(e) => {
@@ -203,6 +221,7 @@ pub fn execute_transaction(
                 account_deltas: payer_delta,
                 pre_balances,
                 post_balances,
+                loaded_accounts,
             }
         }
     }
@@ -262,7 +281,7 @@ mod tests {
         let tx = create_signed_transfer_tx(&kp, to, 100_000);
         let sysvars = test_sysvars();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_ok());
         assert_eq!(result.fee, 5000);
@@ -292,7 +311,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_ok());
     }
@@ -312,7 +331,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::new(200);
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_err());
         assert!(matches!(
@@ -348,7 +367,7 @@ mod tests {
         );
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_err());
         assert!(matches!(
@@ -378,7 +397,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_err());
     }
@@ -398,7 +417,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_err());
         assert_eq!(result.fee, 5000);
@@ -435,7 +454,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_ok());
     }
@@ -460,7 +479,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_ok());
     }
@@ -483,7 +502,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_ok());
         for (addr, _) in &result.account_deltas {
@@ -509,7 +528,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_ok());
 
@@ -536,7 +555,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_err());
         assert!(matches!(
@@ -565,7 +584,7 @@ mod tests {
         let sysvars = test_sysvars();
         let fee_calc = FeeCalculator::default();
         let cache = ProgramCache::new(16);
-        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+        let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
 
         assert!(result.status.is_err());
         assert!(matches!(

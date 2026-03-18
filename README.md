@@ -1,26 +1,26 @@
 # Nusantara
 
-**Post-quantum Layer 1 blockchain built for speed, security, and sovereignty.**
+**High-performance Layer 1 blockchain built for speed, security, and sovereignty.**
 
 ---
 
 ## What is Nusantara?
 
-Nusantara is a high-performance Layer 1 blockchain inspired by Solana's architecture, redesigned with post-quantum cryptography from the ground up. It combines SHA3-512 hashing with Dilithium3 (ML-DSA-65) lattice-based signatures to provide quantum-resistant security without sacrificing throughput. The consensus layer pairs Proof of History (PoH) with Tower BFT for fast finality, while WASM smart contracts via the wasmi interpreter give developers a familiar and portable execution environment. Nusantara is written entirely in Rust (edition 2024) and targets production-grade performance with sub-second slot times.
+Nusantara is a high-performance Layer 1 blockchain inspired by Solana's architecture. It combines SHA3-512 hashing with Dilithium3 (CRYSTALS-Dilithium, NIST Level 3) post-quantum signatures for secure operations. The consensus layer pairs Proof of History (PoH) with Tower BFT for fast finality, while WASM smart contracts via the wasmi interpreter give developers a familiar and portable execution environment. Nusantara is written entirely in Rust (edition 2024) and targets production-grade performance with 400ms slot times.
 
 ## Key Specifications
 
 | Property | Value |
 |---|---|
 | Hash function | SHA3-512 (64-byte output) |
-| Signature scheme | Dilithium3 / ML-DSA-65 (post-quantum) |
+| Signature scheme | Dilithium3 (NIST Level 3 post-quantum) |
 | Public key size | 1,952 bytes |
 | Secret key size | 4,032 bytes |
 | Signature size | 3,309 bytes |
 | Consensus | Proof of History + Tower BFT |
 | Smart contracts | WASM (wasmi interpreter) |
-| Slot duration | 900 ms |
-| Epoch length | 432,000 slots (~4.5 days) |
+| Slot duration | 400 ms |
+| Epoch length | 432,000 slots (~2 days) |
 | Native token | NUSA |
 | Smallest unit | 1 lamport = 10^-9 NUSA |
 | Fee per signature | 5,000 lamports |

@@ -70,7 +70,7 @@ impl PublicKey {
     }
 
     pub(crate) fn from_pq(pk: &dilithium3::PublicKey) -> Self {
-        Self(pk.as_bytes().to_vec())
+        Self(pqcrypto_traits::sign::PublicKey::as_bytes(pk).to_vec())
     }
 
     pub(crate) fn to_pq(&self) -> Result<dilithium3::PublicKey, CryptoError> {
@@ -102,6 +102,7 @@ impl FromStr for PublicKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Keypair;
 
     #[test]
     fn from_bytes_wrong_length() {
@@ -111,8 +112,8 @@ mod tests {
 
     #[test]
     fn base64_roundtrip() {
-        let bytes = vec![42u8; PUBLIC_KEY_BYTES];
-        let pk = PublicKey::from_bytes(&bytes).unwrap();
+        let kp = Keypair::generate();
+        let pk = kp.public_key().clone();
         let encoded = pk.to_base64();
         let decoded = PublicKey::from_base64(&encoded).unwrap();
         assert_eq!(pk, decoded);
@@ -120,9 +121,10 @@ mod tests {
 
     #[test]
     fn borsh_roundtrip() {
-        let bytes = vec![42u8; PUBLIC_KEY_BYTES];
-        let pk = PublicKey::from_bytes(&bytes).unwrap();
+        let kp = Keypair::generate();
+        let pk = kp.public_key().clone();
         let encoded = borsh::to_vec(&pk).unwrap();
+        assert_eq!(encoded.len(), 4 + PUBLIC_KEY_BYTES);
         let decoded: PublicKey = borsh::from_slice(&encoded).unwrap();
         assert_eq!(pk, decoded);
     }

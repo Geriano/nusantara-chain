@@ -128,7 +128,7 @@ fn deploy_and_verify() {
     let msg = Message::new(&[init_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &buffer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
     assert!(
         result.status.is_ok(),
         "init buffer failed: {:?}",
@@ -141,7 +141,7 @@ fn deploy_and_verify() {
     let msg = Message::new(&[write_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 2, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 2, &cache, None);
     assert!(result.status.is_ok(), "write failed: {:?}", result.status);
     commit_deltas(&storage, 2, &result);
 
@@ -157,7 +157,7 @@ fn deploy_and_verify() {
     let msg = Message::new(&[deploy_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &program_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 3, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 3, &cache, None);
     assert!(result.status.is_ok(), "deploy failed: {:?}", result.status);
     commit_deltas(&storage, 3, &result);
 
@@ -218,7 +218,7 @@ fn invoke_deployed_program() {
     let msg = Message::new(&[init_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &buffer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 1, &result);
 
@@ -226,7 +226,7 @@ fn invoke_deployed_program() {
     let msg = Message::new(&[write_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 2, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 2, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 2, &result);
 
@@ -241,7 +241,7 @@ fn invoke_deployed_program() {
     let msg = Message::new(&[deploy_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &program_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 3, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 3, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 3, &result);
 
@@ -259,7 +259,7 @@ fn invoke_deployed_program() {
     let msg = Message::new(&[invoke_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 4, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 4, &cache, None);
     assert!(result.status.is_ok(), "invoke failed: {:?}", result.status);
 }
 
@@ -296,7 +296,7 @@ fn upgrade_program() {
     let msg = Message::new(&[init_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &buffer_v1_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 1, &result);
 
@@ -304,7 +304,7 @@ fn upgrade_program() {
     let msg = Message::new(&[write_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 2, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 2, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 2, &result);
 
@@ -319,7 +319,7 @@ fn upgrade_program() {
     let msg = Message::new(&[deploy_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &program_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 3, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 3, &cache, None);
     assert!(
         result.status.is_ok(),
         "deploy v1 failed: {:?}",
@@ -337,7 +337,7 @@ fn upgrade_program() {
     let msg = Message::new(&[init_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &buffer_v2_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 4, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 4, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 4, &result);
 
@@ -345,7 +345,7 @@ fn upgrade_program() {
     let msg = Message::new(&[write_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 5, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 5, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 5, &result);
 
@@ -354,7 +354,7 @@ fn upgrade_program() {
     let msg = Message::new(&[upgrade_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 6, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 6, &cache, None);
     assert!(result.status.is_ok(), "upgrade failed: {:?}", result.status);
     commit_deltas(&storage, 6, &result);
 
@@ -401,7 +401,7 @@ fn deploy_invalid_wasm_fails() {
     let msg = Message::new(&[init_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &buffer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 1, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 1, &result);
 
@@ -410,7 +410,7 @@ fn deploy_invalid_wasm_fails() {
     let msg = Message::new(&[write_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 2, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 2, &cache, None);
     assert!(result.status.is_ok());
     commit_deltas(&storage, 2, &result);
 
@@ -420,6 +420,6 @@ fn deploy_invalid_wasm_fails() {
     let msg = Message::new(&[deploy_ix], &payer).unwrap();
     let mut tx = Transaction::new(msg);
     tx.sign(&[&payer_kp, &program_kp]);
-    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 3, &cache);
+    let result = execute_transaction(&tx, &storage, &sysvars, &fee_calc, 3, &cache, None);
     assert!(result.status.is_err(), "deploy of invalid WASM should fail");
 }
