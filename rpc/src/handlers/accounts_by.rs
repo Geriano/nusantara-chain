@@ -18,6 +18,7 @@ pub struct AccountsByQuery {
 
 /// A single account entry in the response list.
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountsByEntry {
     pub address: String,
     pub lamports: u64,
@@ -30,6 +31,7 @@ pub struct AccountsByEntry {
 
 /// Response returned by both by-owner and by-program queries.
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountsByResponse {
     pub accounts: Vec<AccountsByEntry>,
     pub count: usize,

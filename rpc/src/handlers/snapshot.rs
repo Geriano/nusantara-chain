@@ -11,6 +11,7 @@ use utoipa::ToSchema;
 use crate::server::RpcState;
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotResponse {
     pub slot: u64,
     pub bank_hash: String,

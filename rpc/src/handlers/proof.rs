@@ -11,6 +11,7 @@ use crate::server::RpcState;
 
 /// Merkle proof siblings and path data.
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ProofData {
     /// Base64 URL-safe no-pad encoded sibling hashes from leaf to root.
     pub siblings: Vec<String>,
@@ -24,6 +25,7 @@ pub struct ProofData {
 
 /// Response for the account proof endpoint.
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountProofResponse {
     pub address: String,
     pub lamports: u64,

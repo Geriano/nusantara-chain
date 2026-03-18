@@ -34,7 +34,7 @@ pub type SharedLeaderCache = Arc<parking_lot::RwLock<HashMap<u64, LeaderSchedule
 ///
 /// Each variant is tagged with `"type"` so clients can filter on the JSON `type` field.
 #[derive(Clone, Debug, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum PubsubEvent {
     SlotUpdate {
         slot: u64,

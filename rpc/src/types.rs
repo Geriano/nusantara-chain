@@ -4,6 +4,7 @@ use utoipa::ToSchema;
 // ── Health ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: String,
     pub slot: u64,
@@ -20,6 +21,7 @@ pub struct HealthResponse {
 // ── Account ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountResponse {
     pub address: String,
     pub lamports: u64,
@@ -33,6 +35,7 @@ pub struct AccountResponse {
 // ── Block ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct BlockResponse {
     pub slot: u64,
     pub parent_slot: u64,
@@ -47,6 +50,7 @@ pub struct BlockResponse {
 // ── Transaction ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct TransactionStatusResponse {
     pub signature: String,
     pub slot: u64,
@@ -58,18 +62,21 @@ pub struct TransactionStatusResponse {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SendTransactionRequest {
     /// Base64 URL-safe no-pad encoded borsh-serialized transaction
     pub transaction: String,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SendTransactionResponse {
     pub signature: String,
     pub status: String,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SendAndConfirmRequest {
     /// Base64 URL-safe no-pad encoded borsh-serialized transaction
     pub transaction: String,
@@ -83,6 +90,7 @@ fn default_confirm_timeout_ms() -> u64 {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SendAndConfirmResponse {
     pub signature: String,
     pub slot: u64,
@@ -93,6 +101,7 @@ pub struct SendAndConfirmResponse {
 // ── Slot ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SlotResponse {
     pub slot: u64,
     pub latest_stored_slot: Option<u64>,
@@ -100,6 +109,7 @@ pub struct SlotResponse {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct BlockhashResponse {
     pub blockhash: String,
     pub slot: u64,
@@ -108,6 +118,7 @@ pub struct BlockhashResponse {
 // ── Epoch ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct EpochInfoResponse {
     pub epoch: u64,
     pub slot_index: u64,
@@ -120,12 +131,14 @@ pub struct EpochInfoResponse {
 // ── Leader Schedule ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaderScheduleResponse {
     pub epoch: u64,
     pub schedule: Vec<LeaderSlotEntry>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaderSlotEntry {
     pub slot: u64,
     pub leader: String,
@@ -134,12 +147,14 @@ pub struct LeaderSlotEntry {
 // ── Validator ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidatorsResponse {
     pub total_active_stake: u64,
     pub validators: Vec<ValidatorEntry>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidatorEntry {
     pub identity: String,
     pub vote_account: String,
@@ -152,6 +167,7 @@ pub struct ValidatorEntry {
 // ── Stake ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct StakeAccountResponse {
     pub address: String,
     pub lamports: u64,
@@ -168,6 +184,7 @@ pub struct StakeAccountResponse {
 // ── Vote ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct VoteAccountResponse {
     pub address: String,
     pub lamports: u64,
@@ -181,6 +198,7 @@ pub struct VoteAccountResponse {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct EpochCreditEntry {
     pub epoch: u64,
     pub credits: u64,
@@ -190,6 +208,7 @@ pub struct EpochCreditEntry {
 // ── Signatures ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SignatureEntry {
     pub signature: String,
     pub slot: u64,
@@ -197,6 +216,7 @@ pub struct SignatureEntry {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SignaturesResponse {
     pub address: String,
     pub signatures: Vec<SignatureEntry>,
@@ -205,6 +225,7 @@ pub struct SignaturesResponse {
 // ── Program ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ProgramResponse {
     pub address: String,
     pub executable: bool,
@@ -218,17 +239,20 @@ pub struct ProgramResponse {
 // ── Airdrop ──
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AirdropRequest {
     pub address: String,
     pub lamports: u64,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AirdropResponse {
     pub signature: String,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AirdropAndConfirmRequest {
     pub address: String,
     pub lamports: u64,
@@ -238,6 +262,7 @@ pub struct AirdropAndConfirmRequest {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AirdropAndConfirmResponse {
     pub signature: String,
     pub slot: u64,
