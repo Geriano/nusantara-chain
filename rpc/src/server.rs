@@ -35,7 +35,7 @@ const PUBSUB_CHANNEL_CAPACITY: usize = 4096;
 pub const MAX_WS_CONNECTIONS: usize = 1000;
 
 /// Maximum subscriptions per WebSocket connection (slot + block + N signatures).
-pub const MAX_SUBSCRIPTIONS_PER_CONN: usize = 100;
+pub const MAX_SUBSCRIPTIONS_PER_CONN: usize = 10_000;
 
 /// Faucet cooldown per recipient address (seconds).
 pub const FAUCET_COOLDOWN_PER_ADDRESS_SECS: u64 = 60;
@@ -132,6 +132,10 @@ impl RpcState {
     /// Check the faucet per-IP cooldown. Returns `Ok(())` if the IP has not
     /// made a faucet request within the cooldown window.
     pub fn check_faucet_ip_cooldown(&self, ip: IpAddr) -> Result<(), crate::RpcError> {
+        // Exempt localhost and Docker bridge networks
+        if crate::rate_limiter::is_local_or_docker(ip) {
+            return Ok(());
+        }
         if let Some(last) = self.faucet_ip_cooldowns.get(&ip) {
             let elapsed = last.elapsed().as_secs();
             if elapsed < FAUCET_COOLDOWN_PER_IP_SECS {
@@ -146,6 +150,10 @@ impl RpcState {
 
     /// Record a successful faucet airdrop for both address and IP cooldowns.
     pub fn record_faucet_airdrop(&self, address: &str, ip: IpAddr) {
+        // Don't record cooldowns for local/Docker IPs
+        if crate::rate_limiter::is_local_or_docker(ip) {
+            return;
+        }
         let now = Instant::now();
         self.faucet_address_cooldowns
             .insert(address.to_string(), now);

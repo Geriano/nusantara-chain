@@ -203,6 +203,13 @@ where
             .map(|ci| ci.0.ip())
             .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
 
+        // Exempt localhost and Docker bridge networks from rate limiting
+        if is_local_or_docker(ip) {
+            metrics::counter!("nusantara_rpc_requests_allowed").increment(1);
+            let mut inner = self.inner.clone();
+            return Box::pin(async move { inner.call(req).await });
+        }
+
         if self.limiter.check(ip).is_err() {
             debug!(ip = %ip, "RPC request rate-limited");
             metrics::counter!("nusantara_rpc_requests_rejected_rate_limit").increment(1);
@@ -218,6 +225,24 @@ where
         // when calling from a shared reference).
         let mut inner = self.inner.clone();
         Box::pin(async move { inner.call(req).await })
+    }
+}
+
+/// Returns `true` for localhost, Docker, and all RFC 1918 private networks:
+/// - 127.0.0.0/8 (loopback)
+/// - 10.0.0.0/8 (private)
+/// - 172.16.0.0/12 (Docker bridge / private)
+/// - 192.168.0.0/16 (private)
+/// - ::1 (IPv6 loopback)
+pub fn is_local_or_docker(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.octets()[0] == 10
+                || (v4.octets()[0] == 172 && (v4.octets()[1] & 0xF0) == 16)
+                || (v4.octets()[0] == 192 && v4.octets()[1] == 168)
+        }
+        IpAddr::V6(v6) => v6.is_loopback(),
     }
 }
 
