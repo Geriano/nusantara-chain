@@ -174,7 +174,7 @@ mod tests {
         let engine = cache.engine();
         // Attempting to compile invalid WASM should produce an error (not a
         // panic), proving the engine is correctly configured.
-        let result = Module::new(engine, &[0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]);
+        let result = Module::new(engine, [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]);
         // A minimal WASM header is parseable but has no exports -- that's OK,
         // the point is the engine works.
         assert!(result.is_ok());
@@ -187,7 +187,7 @@ mod tests {
 
         // Compile a minimal WASM module.
         let wasm = [0x00u8, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
-        let module = Module::new(engine, &wasm).expect("should compile");
+        let module = Module::new(engine, wasm).expect("should compile");
 
         // Key by bytecode hash (not by some program address).
         let bytecode_hash = hash(&wasm);
@@ -208,7 +208,7 @@ mod tests {
         let engine = cache.engine();
 
         let wasm = [0x00u8, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
-        let module = Module::new(engine, &wasm).expect("should compile");
+        let module = Module::new(engine, wasm).expect("should compile");
 
         let key1 = hash(b"key1");
         let key2 = hash(b"key2");
