@@ -39,6 +39,7 @@ impl TransactionForwarder {
         F: Fn() -> Option<(Hash, SocketAddr)>,
     {
         let interval = tokio::time::Duration::from_millis(FORWARD_INTERVAL_MS);
+        let mut tick = tokio::time::interval(interval);
         let mut batch = Vec::with_capacity(FORWARD_BATCH_SIZE as usize);
 
         loop {
@@ -51,7 +52,7 @@ impl TransactionForwarder {
                         self.flush_batch(&mut batch, &leader_lookup, &local_tx_sender).await;
                     }
                 }
-                _ = tokio::time::sleep(interval) => {
+                _ = tick.tick() => {
                     if !batch.is_empty() {
                         self.flush_batch(&mut batch, &leader_lookup, &local_tx_sender).await;
                     }

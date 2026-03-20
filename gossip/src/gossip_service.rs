@@ -48,6 +48,11 @@ impl GossipRateLimiter {
         entry.1 += 1;
         true
     }
+
+    /// Remove entries whose window has expired, preventing unbounded memory growth.
+    fn purge_expired(&self) {
+        self.counts.retain(|_, (instant, _)| instant.elapsed().as_secs() < 2);
+    }
 }
 
 pub struct GossipService {
@@ -104,6 +109,7 @@ impl GossipService {
         let pull_ci = Arc::clone(&cluster_info);
 
         let purge_ci = Arc::clone(&cluster_info);
+        let purge_rl = Arc::clone(&rate_limiter);
 
         let refresh_ci = Arc::clone(&cluster_info);
 
@@ -128,7 +134,7 @@ impl GossipService {
         // Spawn purge task
         let mut shutdown_purge = shutdown.clone();
         let purge_handle = tokio::spawn(async move {
-            purge_loop(purge_ci, &mut shutdown_purge).await;
+            purge_loop(purge_ci, purge_rl, &mut shutdown_purge).await;
         });
 
         // Spawn self-refresh task (keep our ContactInfo alive in peers' CRDS)
@@ -413,6 +419,7 @@ async fn refresh_loop(
 
 async fn purge_loop(
     cluster_info: Arc<ClusterInfo>,
+    rate_limiter: Arc<GossipRateLimiter>,
     shutdown: &mut watch::Receiver<bool>,
 ) {
     let interval = tokio::time::Duration::from_millis(PURGE_TIMEOUT_MS);
@@ -435,6 +442,8 @@ async fn purge_loop(
 
                 cluster_info.ping_cache().purge_expired();
                 cluster_info.push().clear_prunes();
+
+                rate_limiter.purge_expired();
             }
             _ = shutdown.changed() => {
                 break;
@@ -495,5 +504,31 @@ mod tests {
 
         // Simulate window reset by waiting (can't easily in unit test)
         // Just verify the reset logic exists (tested by the elapsed check)
+    }
+
+    #[test]
+    fn rate_limiter_purge_expired() {
+        let rl = GossipRateLimiter::new(100);
+        let ip1: IpAddr = "1.2.3.4".parse().unwrap();
+        let ip2: IpAddr = "5.6.7.8".parse().unwrap();
+
+        // Insert entries for both IPs
+        rl.check(ip1);
+        rl.check(ip2);
+        assert_eq!(rl.counts.len(), 2);
+
+        // Entries are fresh — purge should not remove them
+        rl.purge_expired();
+        assert_eq!(rl.counts.len(), 2);
+
+        // Manually backdate ip1's window to > 2s ago
+        rl.counts.entry(ip1).and_modify(|e| {
+            e.0 = Instant::now() - std::time::Duration::from_secs(3);
+        });
+
+        rl.purge_expired();
+        assert_eq!(rl.counts.len(), 1);
+        assert!(rl.counts.get(&ip1).is_none());
+        assert!(rl.counts.get(&ip2).is_some());
     }
 }
