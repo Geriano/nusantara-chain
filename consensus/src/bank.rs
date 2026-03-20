@@ -23,13 +23,33 @@ pub struct FrozenBankState {
     pub transaction_count: u64,
 }
 
+/// Holds epoch-level stake data behind a single lock to guarantee atomic reads.
+/// Previously `epoch_stakes`, `total_active_stake`, and `cached_stake_vec` were
+/// stored in separate `RwLock`s, allowing readers to observe partially-updated
+/// state during `recalculate_epoch_stakes`.
+pub(crate) struct EpochStakeState {
+    pub epoch_stakes: HashMap<Hash, u64>,
+    pub total_active_stake: u64,
+    pub cached_stake_vec: Arc<Vec<(Hash, u64)>>,
+}
+
+impl Default for EpochStakeState {
+    fn default() -> Self {
+        Self {
+            epoch_stakes: HashMap::new(),
+            total_active_stake: 0,
+            cached_stake_vec: Arc::new(Vec::new()),
+        }
+    }
+}
+
 pub struct ConsensusBank {
     pub(crate) storage: Arc<Storage>,
     pub(crate) epoch_schedule: EpochSchedule,
     pub(crate) vote_accounts: DashMap<Hash, VoteState>,
     pub(crate) stake_delegations: DashMap<Hash, Delegation>,
-    pub(crate) epoch_stakes: RwLock<HashMap<Hash, u64>>,
-    pub(crate) total_active_stake: RwLock<u64>,
+    /// Combined epoch stake state behind a single lock for atomic reads/writes.
+    pub(crate) epoch_stake_state: RwLock<EpochStakeState>,
     pub(crate) total_supply: RwLock<u64>,
     pub(crate) clock: RwLock<Clock>,
     pub(crate) slot_hashes: RwLock<SlotHashes>,
@@ -41,9 +61,6 @@ pub struct ConsensusBank {
     /// Incremental Merkle tree over all account state.
     /// Protected by a `Mutex` (not held across `.await` points).
     pub(crate) state_tree: Mutex<StateTree>,
-    /// Cached stake distribution vec, updated atomically when epoch stakes change.
-    /// Avoids cloning HashMap -> Vec on every leader check and TurbineTree build.
-    pub(crate) cached_stake_vec: RwLock<Arc<Vec<(Hash, u64)>>>,
 }
 
 impl ConsensusBank {
@@ -53,8 +70,7 @@ impl ConsensusBank {
             epoch_schedule,
             vote_accounts: DashMap::new(),
             stake_delegations: DashMap::new(),
-            epoch_stakes: RwLock::new(HashMap::new()),
-            total_active_stake: RwLock::new(0),
+            epoch_stake_state: RwLock::new(EpochStakeState::default()),
             total_supply: RwLock::new(0),
             clock: RwLock::new(Clock::default()),
             slot_hashes: RwLock::new(SlotHashes::default()),
@@ -62,7 +78,6 @@ impl ConsensusBank {
             current_slot: RwLock::new(0),
             slash_registry: DashMap::new(),
             state_tree: Mutex::new(StateTree::new()),
-            cached_stake_vec: RwLock::new(Arc::new(Vec::new())),
         }
     }
 

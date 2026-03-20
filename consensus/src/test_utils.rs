@@ -4,7 +4,7 @@ pub(crate) mod test_helpers {
 
     use nusantara_core::block::{Block, BlockHeader};
     use nusantara_core::epoch::EpochSchedule;
-    use nusantara_crypto::{hash, Hash};
+    use nusantara_crypto::{Hash, hash};
     use nusantara_storage::Storage;
     use nusantara_vote_program::{VoteInit, VoteState};
 

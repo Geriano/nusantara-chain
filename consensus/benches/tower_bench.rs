@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use nusantara_consensus::tower::{Tower, MAX_LOCKOUT_HISTORY};
+use nusantara_consensus::tower::{MAX_LOCKOUT_HISTORY, Tower};
 use nusantara_crypto::hash;
 use nusantara_vote_program::{Vote, VoteInit, VoteState};
 

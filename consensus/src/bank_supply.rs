@@ -5,7 +5,7 @@ use crate::bank::ConsensusBank;
 impl ConsensusBank {
     /// Get the total active stake.
     pub fn total_active_stake(&self) -> u64 {
-        *self.total_active_stake.read()
+        self.epoch_stake_state.read().total_active_stake
     }
 
     /// Get the total token supply.

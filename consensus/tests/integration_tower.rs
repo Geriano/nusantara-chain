@@ -1,4 +1,4 @@
-use nusantara_consensus::tower::{Tower, MAX_LOCKOUT_HISTORY};
+use nusantara_consensus::tower::{MAX_LOCKOUT_HISTORY, Tower};
 use nusantara_crypto::hash;
 use nusantara_vote_program::{Vote, VoteInit, VoteState};
 
@@ -29,10 +29,10 @@ fn test_tower_31_vote_root_advancement() {
         let result = tower.process_vote(&make_vote(slot)).unwrap();
 
         if slot < MAX_LOCKOUT_HISTORY {
-            assert!(result.new_root_slot.is_none());
+            assert!(result.new_root_slots.is_empty());
         } else {
             // The first vote should become root after 31 confirmations
-            assert_eq!(result.new_root_slot, Some(1));
+            assert_eq!(result.new_root_slots, vec![1]);
         }
     }
 
@@ -41,7 +41,7 @@ fn test_tower_31_vote_root_advancement() {
     // Continue voting - root should advance with each vote
     for slot in (MAX_LOCKOUT_HISTORY + 1)..=(MAX_LOCKOUT_HISTORY + 5) {
         let result = tower.process_vote(&make_vote(slot)).unwrap();
-        assert!(result.new_root_slot.is_some());
+        assert!(!result.new_root_slots.is_empty());
     }
 }
 
@@ -95,7 +95,7 @@ fn test_tower_vote_state_persistence() {
 
     // Should be able to continue processing votes
     let result = tower2.process_vote(&make_vote(11)).unwrap();
-    assert!(result.new_root_slot.is_none());
+    assert!(result.new_root_slots.is_empty());
     assert_eq!(tower2.depth(), 11);
 }
 
@@ -126,7 +126,7 @@ fn test_tower_full_cycle() {
 
     for slot in 1..=total_votes {
         let result = tower.process_vote(&make_vote(slot)).unwrap();
-        if result.new_root_slot.is_some() {
+        if !result.new_root_slots.is_empty() {
             roots_found += 1;
         }
     }

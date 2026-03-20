@@ -26,7 +26,7 @@ fn test_fork_tree_heaviest_fork_with_stake() {
     // Add stake-weighted votes
     tree.add_vote(3, 100); // Fork A gets 100 stake
     tree.add_vote(5, 150); // Fork B gets 150 stake
-    tree.add_vote(6, 50);  // Fork C gets 50 stake
+    tree.add_vote(6, 50); // Fork C gets 50 stake
 
     // Fork B should be the heaviest
     let best = tree.compute_best_fork();
@@ -39,8 +39,13 @@ fn test_fork_tree_root_pruning() {
 
     // Build: 0 -> 1 -> 2 -> 3 -> 4
     for slot in 1..=4 {
-        tree.add_slot(slot, slot - 1, h(&format!("b{slot}")), h(&format!("bk{slot}")))
-            .unwrap();
+        tree.add_slot(
+            slot,
+            slot - 1,
+            h(&format!("b{slot}")),
+            h(&format!("bk{slot}")),
+        )
+        .unwrap();
     }
     // Branch: 0 -> 5
     tree.add_slot(5, 0, h("b5"), h("bk5")).unwrap();

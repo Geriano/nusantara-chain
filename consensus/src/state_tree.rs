@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use nusantara_core::Account;
-use nusantara_crypto::{hashv, Hash};
+use nusantara_crypto::{Hash, hashv};
 use nusantara_storage::Storage;
 use tracing::instrument;
 

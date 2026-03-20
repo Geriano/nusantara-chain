@@ -72,8 +72,7 @@ impl RewardsCalculator {
         if epochs_per_year == 0 {
             return 0;
         }
-        (total_supply_lamports as u128 * rate_bps as u128 / 10_000 / epochs_per_year as u128)
-            as u64
+        (total_supply_lamports as u128 * rate_bps as u128 / 10_000 / epochs_per_year as u128) as u64
     }
 
     /// Calculate epoch rewards with partitioned distribution.
@@ -103,8 +102,9 @@ impl RewardsCalculator {
             return Err(ConsensusError::NoEpochCredits);
         }
 
-        let point_value_lamports =
-            (inflation_rewards as u128 * 1_000_000 / total_points) as u64;
+        // Use u128 throughout to minimize precision loss from integer truncation.
+        // Keep a scale factor of 1_000_000 for sub-lamport precision.
+        let point_value_scaled = inflation_rewards as u128 * 1_000_000 / total_points;
 
         // Calculate individual rewards and partition them
         let mut partitions: Vec<Vec<RewardEntry>> =
@@ -117,8 +117,8 @@ impl RewardsCalculator {
             }
 
             let (stake_account, delegation) = &delegations[idx];
-            let reward_lamports =
-                (points * point_value_lamports as u128 / 1_000_000) as u64;
+            // Use u128 for the full calculation to avoid intermediate truncation
+            let reward_lamports = (points * point_value_scaled / 1_000_000) as u64;
 
             if reward_lamports == 0 {
                 continue;
@@ -131,7 +131,8 @@ impl RewardsCalculator {
                 .map(|(_, vs)| vs.commission)
                 .unwrap_or(0);
 
-            let validator_share = reward_lamports * commission as u64 / 100;
+            // Use u128 intermediate for commission split to avoid overflow
+            let validator_share = (reward_lamports as u128 * commission as u128 / 100) as u64;
             let staker_share = reward_lamports.saturating_sub(validator_share);
 
             // Partition by hash(stake_account) % PARTITION_COUNT
@@ -148,6 +149,19 @@ impl RewardsCalculator {
 
             total_distributed += staker_share + validator_share;
         }
+
+        // Distribute remainder from truncation to the first non-empty partition entry.
+        // This ensures total_distributed == inflation_rewards when possible.
+        let remainder = inflation_rewards.saturating_sub(total_distributed);
+        if remainder > 0
+            && let Some(first_entry) = partitions.iter_mut().flat_map(|p| p.iter_mut()).next()
+        {
+            first_entry.lamports += remainder;
+            first_entry.post_balance = first_entry.post_balance.saturating_add(remainder);
+            total_distributed += remainder;
+        }
+
+        let point_value_lamports = point_value_scaled as u64;
 
         metrics::counter!("nusantara_rewards_epochs_calculated_total").increment(1);
         metrics::gauge!("nusantara_rewards_total_distributed").set(total_distributed as f64);
@@ -214,7 +228,11 @@ mod tests {
     use super::*;
     use nusantara_vote_program::VoteInit;
 
-    fn make_vote_state(node: Hash, commission: u8, epoch_credits: Vec<(u64, u64, u64)>) -> VoteState {
+    fn make_vote_state(
+        node: Hash,
+        commission: u8,
+        epoch_credits: Vec<(u64, u64, u64)>,
+    ) -> VoteState {
         let mut vs = VoteState::new(&VoteInit {
             node_pubkey: node,
             authorized_voter: node,
@@ -247,10 +265,7 @@ mod tests {
     #[test]
     fn calculate_rewards_basic() {
         let voter = nusantara_crypto::hash(b"voter1");
-        let vote_states = vec![(
-            voter,
-            make_vote_state(voter, 10, vec![(1, 100, 0)]),
-        )];
+        let vote_states = vec![(voter, make_vote_state(voter, 10, vec![(1, 100, 0)]))];
 
         let stake_acc = nusantara_crypto::hash(b"staker1");
         let delegations = vec![(
@@ -291,10 +306,7 @@ mod tests {
     #[test]
     fn distribution_status_tracking() {
         let voter = nusantara_crypto::hash(b"voter");
-        let vote_states = vec![(
-            voter,
-            make_vote_state(voter, 5, vec![(1, 50, 0)]),
-        )];
+        let vote_states = vec![(voter, make_vote_state(voter, 5, vec![(1, 50, 0)]))];
         let stake_acc = nusantara_crypto::hash(b"staker");
         let delegations = vec![(
             stake_acc,
@@ -325,10 +337,7 @@ mod tests {
     fn partition_distribution() {
         // Verify rewards spread across partitions
         let voter = nusantara_crypto::hash(b"voter");
-        let vote_states = vec![(
-            voter,
-            make_vote_state(voter, 0, vec![(1, 1000, 0)]),
-        )];
+        let vote_states = vec![(voter, make_vote_state(voter, 0, vec![(1, 1000, 0)]))];
 
         let delegations: Vec<(Hash, Delegation)> = (0u64..100)
             .map(|i| {
@@ -346,17 +355,66 @@ mod tests {
             })
             .collect();
 
-        let rewards = RewardsCalculator::calculate_epoch_rewards(
-            1,
-            100_000_000,
-            &vote_states,
-            &delegations,
-        )
-        .unwrap();
+        let rewards =
+            RewardsCalculator::calculate_epoch_rewards(1, 100_000_000, &vote_states, &delegations)
+                .unwrap();
 
         let non_empty: usize = rewards.partitions.iter().filter(|p| !p.is_empty()).count();
         // With 100 stakers and 4096 partitions, most will be empty but some should be populated
         assert!(non_empty > 0);
         assert!(non_empty <= 100);
+    }
+
+    #[test]
+    fn total_distributed_equals_inflation_rewards() {
+        // Verify that remainder distribution ensures no precision loss.
+        // Use large inflation_rewards relative to total_points to ensure
+        // per-delegation rewards are non-zero.
+        let voter = nusantara_crypto::hash(b"voter");
+        let vote_states = vec![(voter, make_vote_state(voter, 10, vec![(1, 1000, 0)]))];
+
+        // 7 delegations * 1000 credits * 1_000 stake = 7_000_000 total_points
+        // inflation_rewards = 10_000_003 -> point_value_scaled > 0
+        let inflation_rewards = 10_000_003u64;
+
+        let delegations: Vec<(Hash, Delegation)> = (0u64..7)
+            .map(|i| {
+                let acc = nusantara_crypto::hashv(&[b"staker", &i.to_le_bytes()]);
+                (
+                    acc,
+                    Delegation {
+                        voter_pubkey: voter,
+                        stake: 1_000,
+                        activation_epoch: 0,
+                        deactivation_epoch: u64::MAX,
+                        warmup_cooldown_rate_bps: 2500,
+                    },
+                )
+            })
+            .collect();
+
+        let rewards = RewardsCalculator::calculate_epoch_rewards(
+            1,
+            inflation_rewards,
+            &vote_states,
+            &delegations,
+        )
+        .unwrap();
+
+        // Total distributed should equal inflation_rewards (remainder distributed)
+        assert_eq!(
+            rewards.total_rewards_lamports, inflation_rewards,
+            "total_rewards_lamports ({}) should equal inflation_rewards ({})",
+            rewards.total_rewards_lamports, inflation_rewards
+        );
+
+        // Cross-check: sum from partitions should match
+        let sum_from_partitions: u64 = rewards
+            .partitions
+            .iter()
+            .flat_map(|p| p.iter())
+            .map(|e| e.lamports + e.commission_lamports)
+            .sum();
+        assert_eq!(sum_from_partitions, inflation_rewards);
     }
 }

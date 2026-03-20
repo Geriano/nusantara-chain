@@ -11,6 +11,9 @@ pub const OPTIMISTIC_CONFIRMATION_THRESHOLD: u64 =
     const_parse_u64(env!("NUSA_COMMITMENT_OPTIMISTIC_CONFIRMATION_THRESHOLD"));
 pub const SUPERMAJORITY_THRESHOLD: u64 =
     const_parse_u64(env!("NUSA_COMMITMENT_SUPERMAJORITY_THRESHOLD"));
+/// Maximum number of slots tracked in the commitment tracker.
+/// Prevents unbounded memory growth as slots progress.
+pub const MAX_TRACKED_SLOTS: usize = 1024;
 
 #[derive(Clone, Debug)]
 pub struct SlotCommitment {
@@ -42,6 +45,7 @@ impl CommitmentTracker {
     }
 
     /// Begin tracking a slot at Processed level.
+    /// Prunes oldest entries when capacity exceeds `MAX_TRACKED_SLOTS`.
     #[instrument(skip(self), level = "debug")]
     pub fn track_slot(&mut self, slot: u64, block_hash: Hash) {
         self.slots.entry(slot).or_insert(SlotCommitment {
@@ -50,16 +54,21 @@ impl CommitmentTracker {
             total_stake_voted: 0,
             commitment: CommitmentLevel::Processed,
         });
+
+        // Prune oldest entries when capacity exceeded
+        if self.slots.len() > MAX_TRACKED_SLOTS {
+            let mut slot_keys: Vec<u64> = self.slots.keys().copied().collect();
+            slot_keys.sort_unstable();
+            let to_remove = self.slots.len() - MAX_TRACKED_SLOTS;
+            for &s in &slot_keys[..to_remove] {
+                self.slots.remove(&s);
+            }
+        }
     }
 
     /// Record a vote for a slot, returning the new commitment level.
     #[instrument(skip(self), level = "debug")]
-    pub fn record_vote(
-        &mut self,
-        slot: u64,
-        block_hash: Hash,
-        stake: u64,
-    ) -> CommitmentLevel {
+    pub fn record_vote(&mut self, slot: u64, block_hash: Hash, stake: u64) -> CommitmentLevel {
         let entry = self.slots.entry(slot).or_insert(SlotCommitment {
             slot,
             block_hash,
@@ -70,13 +79,16 @@ impl CommitmentTracker {
         entry.total_stake_voted = entry.total_stake_voted.saturating_add(stake);
 
         if self.total_active_stake > 0 {
-            let pct = entry.total_stake_voted * 100 / self.total_active_stake;
+            // Use u128 intermediate to prevent overflow when total_stake_voted > u64::MAX / 100
+            let pct =
+                (entry.total_stake_voted as u128 * 100 / self.total_active_stake as u128) as u64;
             if pct >= SUPERMAJORITY_THRESHOLD && entry.commitment != CommitmentLevel::Finalized {
                 entry.commitment = CommitmentLevel::Confirmed;
                 if slot > self.highest_confirmed {
                     self.highest_confirmed = slot;
                 }
-                metrics::gauge!("nusantara_commitment_highest_confirmed").set(self.highest_confirmed as f64);
+                metrics::gauge!("nusantara_commitment_highest_confirmed")
+                    .set(self.highest_confirmed as f64);
             }
         }
 
@@ -91,7 +103,8 @@ impl CommitmentTracker {
         }
         if slot > self.highest_finalized {
             self.highest_finalized = slot;
-            metrics::gauge!("nusantara_commitment_highest_finalized").set(self.highest_finalized as f64);
+            metrics::gauge!("nusantara_commitment_highest_finalized")
+                .set(self.highest_finalized as f64);
         }
     }
 
@@ -183,5 +196,42 @@ mod tests {
     fn untracked_slot_error() {
         let tracker = CommitmentTracker::new(1000);
         assert!(tracker.get_commitment(99).is_err());
+    }
+
+    #[test]
+    fn large_stake_commitment_no_overflow() {
+        // total_stake_voted * 100 would overflow u64 for large values
+        let total_stake = u64::MAX / 10;
+        let mut tracker = CommitmentTracker::new(total_stake);
+        let h = nusantara_crypto::hash(b"block");
+
+        tracker.track_slot(1, h);
+        // Vote with 70% of total_stake — use u128 to compute the value without overflow
+        let vote_stake = (total_stake as u128 * 70 / 100) as u64;
+        let level = tracker.record_vote(1, h, vote_stake);
+        // 70% >= 66% threshold -> Confirmed
+        assert_eq!(level, CommitmentLevel::Confirmed);
+    }
+
+    #[test]
+    fn max_tracked_slots_pruning() {
+        let mut tracker = CommitmentTracker::new(1000);
+        let h = nusantara_crypto::hash(b"h");
+
+        // Fill beyond MAX_TRACKED_SLOTS
+        for slot in 1..=(MAX_TRACKED_SLOTS as u64 + 100) {
+            tracker.track_slot(slot, h);
+        }
+
+        // Should be pruned to MAX_TRACKED_SLOTS
+        assert_eq!(tracker.slots.len(), MAX_TRACKED_SLOTS);
+
+        // Oldest slots should be gone
+        assert!(tracker.get_commitment(1).is_err());
+        assert!(tracker.get_commitment(100).is_err());
+
+        // Newest slots should still be present
+        let newest = MAX_TRACKED_SLOTS as u64 + 100;
+        assert!(tracker.get_commitment(newest).is_ok());
     }
 }

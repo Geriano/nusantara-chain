@@ -1,5 +1,5 @@
 use nusantara_core::Account;
-use nusantara_crypto::{hashv, Hash};
+use nusantara_crypto::{Hash, hashv};
 use nusantara_storage::Storage;
 use tracing::instrument;
 
@@ -42,8 +42,7 @@ impl ConsensusBank {
     /// Persist critical state to storage.
     #[instrument(skip(self), level = "info")]
     pub fn flush_to_storage(&self, frozen: &FrozenBankState) -> Result<(), ConsensusError> {
-        self.storage
-            .put_bank_hash(frozen.slot, &frozen.bank_hash)?;
+        self.storage.put_bank_hash(frozen.slot, &frozen.bank_hash)?;
         self.storage
             .put_slot_hash(frozen.slot, &frozen.block_hash)?;
         Ok(())

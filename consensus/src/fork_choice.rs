@@ -216,9 +216,7 @@ impl ForkTree {
             }
         }
         // Remove old root if different from new root
-        if self.root_slot != new_root
-            && self.nodes.remove(&self.root_slot).is_some()
-        {
+        if self.root_slot != new_root && self.nodes.remove(&self.root_slot).is_some() {
             pruned.push(self.root_slot);
         }
 
@@ -349,8 +347,13 @@ mod tests {
     fn add_linear_chain() {
         let mut tree = ForkTree::new(0, h("b0"), h("bk0"));
         for slot in 1..=10 {
-            tree.add_slot(slot, slot - 1, h(&format!("b{slot}")), h(&format!("bk{slot}")))
-                .unwrap();
+            tree.add_slot(
+                slot,
+                slot - 1,
+                h(&format!("b{slot}")),
+                h(&format!("bk{slot}")),
+            )
+            .unwrap();
         }
         assert_eq!(tree.node_count(), 11);
     }

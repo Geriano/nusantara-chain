@@ -12,10 +12,7 @@ impl ReplayStage {
     /// their parents.
     pub fn advance_root(&mut self, root: u64) -> Result<(), ConsensusError> {
         if !self.fork_tree.contains(root) {
-            tracing::debug!(
-                root,
-                "skipping root advancement — slot not in fork tree"
-            );
+            tracing::debug!(root, "skipping root advancement — slot not in fork tree");
             return Ok(());
         }
         let pruned = self.fork_tree.set_root(root);
@@ -52,7 +49,10 @@ impl ReplayStage {
             // Check switch threshold (38%) — need enough stake on alternative fork
             let alt_stake = self.fork_tree.get_node(best)?.subtree_stake;
             let total = self.fork_tree.total_active_stake();
-            if total == 0 || alt_stake * 100 / total < crate::tower::SWITCH_THRESHOLD_PERCENTAGE {
+            if total == 0
+                || ((alt_stake as u128 * 100 / total as u128) as u64)
+                    < crate::tower::SWITCH_THRESHOLD_PERCENTAGE
+            {
                 return None;
             }
         }

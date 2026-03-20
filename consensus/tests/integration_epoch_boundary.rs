@@ -91,11 +91,7 @@ fn test_epoch_boundary_leader_schedule_rotation() {
     assert_ne!(s0.slot_leaders, s1.slot_leaders);
 
     // v3 should appear in epoch 1 schedule
-    let v3_slots = s1
-        .slot_leaders
-        .iter()
-        .filter(|l| **l == v3)
-        .count();
+    let v3_slots = s1.slot_leaders.iter().filter(|l| **l == v3).count();
     assert!(v3_slots > 0);
 
     // v3 should have roughly 50% of slots (1000/2000)
@@ -182,7 +178,10 @@ fn test_epoch_boundary_partitioned_rewards() {
     assert!(!status.is_complete());
 
     for partition in &rewards.partitions {
-        let partition_total: u64 = partition.iter().map(|e| e.lamports + e.commission_lamports).sum();
+        let partition_total: u64 = partition
+            .iter()
+            .map(|e| e.lamports + e.commission_lamports)
+            .sum();
         status.record_partition_distributed(partition_total);
     }
     assert!(status.is_complete());
