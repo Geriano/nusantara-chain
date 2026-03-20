@@ -1,3 +1,5 @@
+use std::io::Read;
+
 use crate::error::TurbineError;
 
 /// Tag byte prefixed to all wire messages.
@@ -9,6 +11,10 @@ const COMPRESSION_THRESHOLD: usize = 256;
 
 /// Zstd compression level (3 = fast with good ratio).
 const ZSTD_LEVEL: i32 = 3;
+
+/// Maximum allowed decompressed output size (4 MiB).
+/// Prevents decompression bombs where a tiny compressed payload expands to gigabytes.
+const MAX_DECOMPRESS_SIZE: usize = 4 * 1024 * 1024;
 
 /// Compress `data` with a 1-byte tag prefix.
 /// Returns `TAG_RAW || data` if below threshold or incompressible,
@@ -47,6 +53,9 @@ pub fn compress(data: &[u8]) -> Result<Vec<u8>, TurbineError> {
 }
 
 /// Decompress a tagged payload produced by [`compress`].
+///
+/// Enforces a [`MAX_DECOMPRESS_SIZE`] limit to prevent decompression bombs
+/// where a small compressed payload could expand to gigabytes of memory.
 pub fn decompress(tagged: &[u8]) -> Result<Vec<u8>, TurbineError> {
     if tagged.is_empty() {
         return Err(TurbineError::Decompression("empty payload".to_string()));
@@ -55,9 +64,26 @@ pub fn decompress(tagged: &[u8]) -> Result<Vec<u8>, TurbineError> {
     match tagged[0] {
         TAG_RAW => Ok(tagged[1..].to_vec()),
         TAG_ZSTD => {
-            let decompressed = zstd::decode_all(&tagged[1..])
+            let decoder = zstd::Decoder::new(&tagged[1..])
                 .map_err(|e| TurbineError::Decompression(e.to_string()))?;
-            Ok(decompressed)
+
+            // Allow reading one byte past the limit so we can detect overflow.
+            let limit = MAX_DECOMPRESS_SIZE as u64 + 1;
+            let mut limited = decoder.take(limit);
+
+            let mut buf = Vec::new();
+            limited
+                .read_to_end(&mut buf)
+                .map_err(|e| TurbineError::Decompression(e.to_string()))?;
+
+            if buf.len() > MAX_DECOMPRESS_SIZE {
+                metrics::counter!("nusantara_turbine_decompression_bomb_rejected").increment(1);
+                return Err(TurbineError::Decompression(format!(
+                    "decompressed output exceeds limit of {MAX_DECOMPRESS_SIZE} bytes"
+                )));
+            }
+
+            Ok(buf)
         }
         tag => Err(TurbineError::Decompression(format!(
             "unknown compression tag: 0x{tag:02x}"
@@ -105,5 +131,43 @@ mod tests {
     fn invalid_tag_error() {
         let bad = vec![0xFF, 1, 2, 3];
         assert!(decompress(&bad).is_err());
+    }
+
+    #[test]
+    fn decompression_bomb_rejected() {
+        // Create a payload that compresses well but decompresses to > 4 MiB.
+        // Repeating zeros compress extremely well with zstd.
+        let oversized = vec![0u8; MAX_DECOMPRESS_SIZE + 1];
+        let compressed =
+            zstd::encode_all(oversized.as_slice(), ZSTD_LEVEL).expect("compression must succeed");
+
+        // Prepend the TAG_ZSTD byte to simulate wire format
+        let mut tagged = Vec::with_capacity(1 + compressed.len());
+        tagged.push(TAG_ZSTD);
+        tagged.extend_from_slice(&compressed);
+
+        let result = decompress(&tagged);
+        assert!(result.is_err(), "decompression bomb should be rejected");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("exceeds limit"),
+            "error should mention limit: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn decompression_within_limit_succeeds() {
+        // Create a payload that compresses well and is exactly at the limit
+        let at_limit = vec![0u8; MAX_DECOMPRESS_SIZE];
+        let compressed =
+            zstd::encode_all(at_limit.as_slice(), ZSTD_LEVEL).expect("compression must succeed");
+
+        let mut tagged = Vec::with_capacity(1 + compressed.len());
+        tagged.push(TAG_ZSTD);
+        tagged.extend_from_slice(&compressed);
+
+        let result = decompress(&tagged);
+        assert!(result.is_ok(), "payload at exactly the limit should succeed");
+        assert_eq!(result.unwrap().len(), MAX_DECOMPRESS_SIZE);
     }
 }
