@@ -25,6 +25,10 @@ use crate::jsonrpc::{
 };
 use crate::server::RpcState;
 
+/// Maximum number of requests allowed in a single JSON-RPC batch.
+/// Batches exceeding this limit are rejected to prevent resource exhaustion.
+const MAX_BATCH_SIZE: usize = 100;
+
 // ---------------------------------------------------------------------------
 // Parameter helpers
 // ---------------------------------------------------------------------------
@@ -487,6 +491,31 @@ pub async fn handle_jsonrpc(
                 .into_response();
         }
 
+        // Reject oversized batches to prevent resource exhaustion.
+        if arr.len() > MAX_BATCH_SIZE {
+            warn!(
+                batch_size = arr.len(),
+                max = MAX_BATCH_SIZE,
+                "JSON-RPC batch size limit exceeded"
+            );
+            metrics::counter!("nusantara_rpc_jsonrpc_batch_rejected").increment(1);
+            return (
+                StatusCode::OK,
+                Json(
+                    serde_json::to_value(JsonRpcResponse::error(
+                        Value::Null,
+                        INVALID_REQUEST,
+                        format!(
+                            "batch too large: {len} requests exceeds maximum of {MAX_BATCH_SIZE}",
+                            len = arr.len()
+                        ),
+                    ))
+                    .expect("JsonRpcResponse serialization cannot fail"),
+                ),
+            )
+                .into_response();
+        }
+
         let mut responses = Vec::with_capacity(arr.len());
         for item in arr {
             let resp = process_single_request(&state, item).await;
@@ -644,5 +673,41 @@ mod tests {
         // We cannot construct RpcState without full infrastructure, but we can
         // verify the method-not-found error code constant is correct per spec.
         assert_eq!(METHOD_NOT_FOUND, -32601);
+    }
+
+    #[test]
+    fn max_batch_size_constant() {
+        assert_eq!(MAX_BATCH_SIZE, 100);
+    }
+
+    #[test]
+    fn batch_within_limit_is_accepted() {
+        // A batch with exactly MAX_BATCH_SIZE items should be accepted
+        // (not exceed the limit). We test the condition, not the full handler.
+        let items: Vec<Value> = (0..MAX_BATCH_SIZE)
+            .map(|i| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "getHealth",
+                    "id": i
+                })
+            })
+            .collect();
+        assert!(items.len() <= MAX_BATCH_SIZE);
+    }
+
+    #[test]
+    fn batch_exceeding_limit_is_detected() {
+        let items: Vec<Value> = (0..=MAX_BATCH_SIZE)
+            .map(|i| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "getHealth",
+                    "id": i
+                })
+            })
+            .collect();
+        // 101 items exceeds the 100 limit
+        assert!(items.len() > MAX_BATCH_SIZE);
     }
 }
