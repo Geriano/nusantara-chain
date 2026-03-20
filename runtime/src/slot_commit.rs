@@ -93,7 +93,10 @@ impl SlotCommitter {
                     fee = result.fee,
                     "transaction failed"
                 );
-                (TransactionStatus::Failed(msg.clone()), format!("failed: {msg}"))
+                (
+                    TransactionStatus::Failed(msg.clone()),
+                    format!("failed: {msg}"),
+                )
             }
         };
 

@@ -33,9 +33,7 @@ pub fn process_stake(
         StakeInstruction::Withdraw(lamports) => {
             withdraw::process_withdraw(accounts, lamports, ctx, sysvars)
         }
-        StakeInstruction::Split(lamports) => {
-            split::process_split(accounts, lamports, ctx, sysvars)
-        }
+        StakeInstruction::Split(lamports) => split::process_split(accounts, lamports, ctx, sysvars),
         StakeInstruction::Merge
         | StakeInstruction::Authorize(_, _)
         | StakeInstruction::SetLockup(_) => Err(RuntimeError::ProgramError {
@@ -54,8 +52,8 @@ mod tests {
     use nusantara_rent_program::Rent;
     use nusantara_stake_program::{Authorized, Lockup, Meta, StakeStateV2};
 
-    use crate::test_utils::test_sysvars_with_clock;
     use crate::sysvar_cache::SysvarCache;
+    use crate::test_utils::test_sysvars_with_clock;
     use crate::transaction_context::TransactionContext;
 
     fn test_sysvars() -> SysvarCache {

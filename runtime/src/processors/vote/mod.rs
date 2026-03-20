@@ -28,7 +28,9 @@ pub fn process_vote(
         VoteInstruction::InitializeAccount(init) => {
             initialize::process_initialize(accounts, init, ctx, sysvars)
         }
-        VoteInstruction::Vote(vote) => vote_action::process_vote_action(accounts, vote, ctx, sysvars),
+        VoteInstruction::Vote(vote) => {
+            vote_action::process_vote_action(accounts, vote, ctx, sysvars)
+        }
         VoteInstruction::Authorize(new_auth, auth_type) => {
             authorize::process_authorize(accounts, new_auth, auth_type, ctx)
         }

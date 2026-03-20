@@ -120,7 +120,8 @@ pub fn execute_slot_parallel(
 
     metrics::counter!("nusantara_runtime_parallel_slot_transactions_total")
         .increment(result.transactions_executed);
-    metrics::counter!("nusantara_runtime_parallel_slot_fees_collected_total").increment(result.total_fees);
+    metrics::counter!("nusantara_runtime_parallel_slot_fees_collected_total")
+        .increment(result.total_fees);
     metrics::counter!("nusantara_runtime_parallel_slot_compute_consumed")
         .increment(result.total_compute_consumed);
     metrics::counter!("nusantara_runtime_parallel_batches_total").increment(batches.len() as u64);
@@ -217,8 +218,8 @@ pub fn execute_slot_parallel_deferred(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nusantara_core::program::SYSTEM_PROGRAM_ID;
     use nusantara_core::Account;
+    use nusantara_core::program::SYSTEM_PROGRAM_ID;
     use nusantara_crypto::{Hash, Keypair, hash};
 
     use crate::test_utils::{test_storage, test_sysvars, transfer_tx};

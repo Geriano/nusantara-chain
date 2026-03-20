@@ -148,7 +148,15 @@ fn initialize_delegate_deactivate_withdraw() {
     let mut w_tx = Transaction::new(w_msg);
     w_tx.sign(&[&withdrawer_kp]);
 
-    let result = execute_transaction(&w_tx, &storage, &later_sysvars, &fee_calc, 200, &cache, None);
+    let result = execute_transaction(
+        &w_tx,
+        &storage,
+        &later_sysvars,
+        &fee_calc,
+        200,
+        &cache,
+        None,
+    );
     assert!(
         result.status.is_ok(),
         "withdraw failed: {:?}",

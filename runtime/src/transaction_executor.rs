@@ -196,7 +196,8 @@ pub fn execute_transaction(
             let post_balances = ctx.post_balances();
             let deltas = ctx.collect_account_deltas();
             metrics::counter!("nusantara_runtime_transactions_executed_total").increment(1);
-            metrics::counter!("nusantara_runtime_compute_units_consumed").increment(compute_units_consumed);
+            metrics::counter!("nusantara_runtime_compute_units_consumed")
+                .increment(compute_units_consumed);
             TransactionResult {
                 tx_hash,
                 status: Ok(()),

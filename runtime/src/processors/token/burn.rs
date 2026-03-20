@@ -18,7 +18,10 @@ pub(super) fn process_burn(
     let auth_idx = accounts[2] as usize;
 
     if src_idx == mint_idx {
-        return Err(RuntimeError::AccountIndexAliasing { idx_a: src_idx, idx_b: mint_idx });
+        return Err(RuntimeError::AccountIndexAliasing {
+            idx_a: src_idx,
+            idx_b: mint_idx,
+        });
     }
 
     let auth = ctx.get_account(auth_idx)?;
