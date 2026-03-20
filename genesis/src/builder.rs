@@ -294,6 +294,7 @@ impl<'a> GenesisBuilder<'a> {
                 state_root: Hash::zero(),
             },
             transactions: Vec::new(),
+            batches: Vec::new(),
         };
         self.storage.put_block(&block)?;
 

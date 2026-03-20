@@ -40,4 +40,16 @@ pub enum TurbineError {
 
     #[error("channel send error: {0}")]
     ChannelSend(String),
+
+    #[error("compression error: {0}")]
+    Compression(String),
+
+    #[error("decompression error: {0}")]
+    Decompression(String),
+
+    #[error("merkle proof verification failed for shred slot={slot} index={index}")]
+    MerkleProofVerification { slot: u64, index: u32 },
+
+    #[error("missing shred batch header for slot {slot}")]
+    MissingBatchHeader { slot: u64 },
 }

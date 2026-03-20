@@ -352,6 +352,7 @@ impl ValidatorNode {
         let commitment_tracker = CommitmentTracker::new(bank.total_active_stake());
         let gpu_verifier = GpuPohVerifier::new().ok().flatten();
         let mut replay_stage = ReplayStage::new(
+            identity_address,
             Arc::clone(&bank),
             tower,
             fork_tree,

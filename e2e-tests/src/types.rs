@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 // ── Health ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: String,
     pub slot: u64,
@@ -19,6 +20,7 @@ pub struct HealthResponse {
 // ── Slot ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SlotResponse {
     pub slot: u64,
     pub latest_stored_slot: Option<u64>,
@@ -26,6 +28,7 @@ pub struct SlotResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BlockhashResponse {
     pub blockhash: String,
     pub slot: u64,
@@ -34,6 +37,7 @@ pub struct BlockhashResponse {
 // ── Block ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BlockResponse {
     pub slot: u64,
     pub parent_slot: u64,
@@ -48,6 +52,7 @@ pub struct BlockResponse {
 // ── Account ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountResponse {
     pub address: String,
     pub lamports: u64,
@@ -61,6 +66,7 @@ pub struct AccountResponse {
 // ── Transaction ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransactionStatusResponse {
     pub signature: String,
     pub slot: u64,
@@ -72,11 +78,13 @@ pub struct TransactionStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendTransactionRequest {
     pub transaction: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendTransactionResponse {
     pub signature: String,
     #[serde(default)]
@@ -84,6 +92,7 @@ pub struct SendTransactionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendAndConfirmRequest {
     pub transaction: String,
     #[serde(default = "default_confirm_timeout_ms")]
@@ -95,6 +104,7 @@ fn default_confirm_timeout_ms() -> u64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendAndConfirmResponse {
     pub signature: String,
     pub slot: u64,
@@ -105,17 +115,20 @@ pub struct SendAndConfirmResponse {
 // ── Airdrop ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AirdropRequest {
     pub address: String,
     pub lamports: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AirdropResponse {
     pub signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AirdropAndConfirmRequest {
     pub address: String,
     pub lamports: u64,
@@ -124,6 +137,7 @@ pub struct AirdropAndConfirmRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AirdropAndConfirmResponse {
     pub signature: String,
     pub slot: u64,
@@ -134,12 +148,14 @@ pub struct AirdropAndConfirmResponse {
 // ── Validators ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidatorsResponse {
     pub total_active_stake: u64,
     pub validators: Vec<ValidatorEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidatorEntry {
     pub identity: String,
     pub vote_account: String,
@@ -152,6 +168,7 @@ pub struct ValidatorEntry {
 // ── Epoch ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EpochInfoResponse {
     pub epoch: u64,
     pub slot_index: u64,
@@ -164,12 +181,14 @@ pub struct EpochInfoResponse {
 // ── Leader Schedule ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaderScheduleResponse {
     pub epoch: u64,
     pub schedule: Vec<LeaderSlotEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaderSlotEntry {
     pub slot: u64,
     pub leader: String,

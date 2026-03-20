@@ -117,6 +117,30 @@ async fn handle_connection(
             Ok(data) => {
                 let raw_size = data.len();
                 match TpuMessage::deserialize_from_bytes(&data) {
+                    Ok(TpuMessage::SignedBatch(batch)) => {
+                        // Validate batch (1 Dilithium3 + N Merkle proofs)
+                        if let Err(e) = TxValidator::validate_batch(&batch, raw_size) {
+                            debug!(%ip, error = %e, "invalid batch");
+                            metrics::counter!("nusantara_tpu_invalid_transactions_total").increment(1);
+                            continue;
+                        }
+
+                        metrics::counter!("nusantara_tpu_batches_received_total").increment(1);
+                        metrics::counter!("nusantara_tpu_transactions_received_total")
+                            .increment(batch.entries.len() as u64);
+
+                        // Send each entry as a transaction
+                        for tx in batch.to_transactions() {
+                            if let Err(e) = rate_limiter.check_rate_limit(ip) {
+                                debug!(%ip, error = %e, "rate limited");
+                                return;
+                            }
+                            if tx_sender.send(tx).await.is_err() {
+                                warn!("tx channel closed");
+                                return;
+                            }
+                        }
+                    }
                     Ok(msg) => {
                         for tx in msg.transactions() {
                             if let Err(e) = rate_limiter.check_rate_limit(ip) {

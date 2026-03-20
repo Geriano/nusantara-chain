@@ -1,25 +1,35 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use nusantara_core::batch_transaction::SignedTransactionBatch;
 use nusantara_core::transaction::Transaction;
+
+use crate::compression;
+use crate::tx_validator::MAX_TRANSACTION_SIZE;
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TpuMessage {
     Transaction(Box<Transaction>),
     TransactionBatch(Vec<Transaction>),
+    SignedBatch(Box<SignedTransactionBatch>),
 }
 
 impl TpuMessage {
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, String> {
-        borsh::to_vec(self).map_err(|e| e.to_string())
+        let raw = borsh::to_vec(self).map_err(|e| e.to_string())?;
+        compression::compress(&raw).map_err(|e| e.to_string())
     }
 
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        borsh::from_slice(bytes).map_err(|e| e.to_string())
+        let max_size = bytes.len() * compression::MAX_DECOMPRESSION_RATIO
+            + MAX_TRANSACTION_SIZE as usize;
+        let raw = compression::decompress(bytes, max_size).map_err(|e| e.to_string())?;
+        borsh::from_slice(&raw).map_err(|e| e.to_string())
     }
 
     pub fn transactions(&self) -> Vec<Transaction> {
         match self {
             Self::Transaction(tx) => vec![(**tx).clone()],
             Self::TransactionBatch(txs) => txs.clone(),
+            Self::SignedBatch(batch) => batch.to_transactions(),
         }
     }
 }

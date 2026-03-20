@@ -7,8 +7,8 @@ use tokio::net::UdpSocket;
 use tracing::{debug, info, instrument};
 
 use crate::error::TurbineError;
+use crate::merkle_shred::MerkleShred;
 use crate::shredder::Shredder;
-use crate::signed_shred::SignedShred;
 use crate::turbine_tree::TurbineTree;
 
 #[derive(Clone)]
@@ -23,9 +23,7 @@ impl BroadcastStage {
     }
 
     /// Shred a block and broadcast to layer-0 turbine peers.
-    /// `addr_lookup` maps identity Hash to turbine SocketAddr.
-    ///
-    /// Pre-serializes all shred messages to avoid redundant per-peer serialization.
+    /// Sends the ShredBatchHeader first, then individual Merkle shreds.
     #[instrument(skip(self, block, tree, addr_lookup), fields(slot = block.header.slot))]
     pub async fn broadcast_block<F>(
         &self,
@@ -54,12 +52,22 @@ impl BroadcastStage {
             "broadcasting block shreds"
         );
 
-        // Pre-serialize all shred messages (one serialization per shred)
+        // Send ShredBatchHeader FIRST
+        let header_msg = crate::protocol::TurbineMessage::ShredBatchHeader(batch.header.clone());
+        if let Ok(bytes) = header_msg.serialize_to_bytes() {
+            for addr in &peer_addrs {
+                if let Err(e) = self.socket.send_to(&bytes, addr).await {
+                    debug!(%addr, error = %e, "failed to send batch header");
+                }
+            }
+        }
+
+        // Pre-serialize all shred messages
         let mut serialized_shreds =
             Vec::with_capacity(batch.data_shreds.len() + batch.code_shreds.len());
 
         for shred in &batch.data_shreds {
-            let msg = crate::protocol::TurbineMessage::Shred(SignedShred::Data(shred.clone()));
+            let msg = crate::protocol::TurbineMessage::Shred(MerkleShred::Data(shred.clone()));
             match msg.serialize_to_bytes() {
                 Ok(bytes) => serialized_shreds.push(bytes),
                 Err(e) => {
@@ -69,7 +77,7 @@ impl BroadcastStage {
         }
 
         for shred in &batch.code_shreds {
-            let msg = crate::protocol::TurbineMessage::Shred(SignedShred::Code(shred.clone()));
+            let msg = crate::protocol::TurbineMessage::Shred(MerkleShred::Code(shred.clone()));
             match msg.serialize_to_bytes() {
                 Ok(bytes) => serialized_shreds.push(bytes),
                 Err(e) => {

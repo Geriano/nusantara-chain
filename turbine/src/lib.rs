@@ -1,5 +1,6 @@
 pub mod error;
-pub mod signed_shred;
+pub mod compression;
+pub mod merkle_shred;
 pub mod erasure;
 pub mod shredder;
 pub mod deshredder;
@@ -12,7 +13,7 @@ pub mod retransmit_stage;
 pub mod repair_service;
 
 pub use error::TurbineError;
-pub use signed_shred::{SignedDataShred, SignedCodeShred, SignedShred};
+pub use merkle_shred::{MerkleDataShred, MerkleCodeShred, MerkleShred, ShredBatchHeader};
 pub use erasure::ErasureCoder;
 pub use shredder::{Shredder, ShredBatch};
 pub use deshredder::Deshredder;

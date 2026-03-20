@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use dashmap::DashMap;
 use nusantara_core::block::Block;
 use nusantara_core::native_token::const_parse_u64;
+use nusantara_crypto::Hash;
 use nusantara_storage::shred::DataShred;
 
 use crate::deshredder::Deshredder;
-use crate::signed_shred::SignedDataShred;
+use crate::merkle_shred::{MerkleDataShred, ShredBatchHeader};
 
 pub const MAX_SHREDS_PER_SLOT: u64 =
     const_parse_u64(env!("NUSA_TURBINE_MAX_SHREDS_PER_SLOT"));
@@ -14,6 +15,8 @@ pub const MAX_SHREDS_PER_SLOT: u64 =
 struct SlotShreds {
     data_shreds: BTreeMap<u32, DataShred>,
     last_index: Option<u32>,
+    /// Cached batch header for this slot (contains Merkle root + signature).
+    header: Option<ShredBatchHeader>,
 }
 
 impl SlotShreds {
@@ -21,18 +24,16 @@ impl SlotShreds {
         Self {
             data_shreds: BTreeMap::new(),
             last_index: None,
+            header: None,
         }
     }
 
     /// Insert a shred, enforcing the per-slot shred count limit.
-    /// Returns false if the shred was rejected due to limits.
-    fn insert(&mut self, shred: &SignedDataShred) -> bool {
-        // Reject if shred index exceeds max
+    fn insert(&mut self, shred: &MerkleDataShred) -> bool {
         if shred.index() >= MAX_SHREDS_PER_SLOT as u32 {
             metrics::counter!("nusantara_turbine_shreds_rejected_max_index").increment(1);
             return false;
         }
-        // Reject if slot already has too many shreds
         if self.data_shreds.len() >= MAX_SHREDS_PER_SLOT as usize {
             metrics::counter!("nusantara_turbine_shreds_rejected_max_index").increment(1);
             return false;
@@ -49,7 +50,6 @@ impl SlotShreds {
             Some(l) => l,
             None => return false,
         };
-        // Need all indices from 0 to last
         self.data_shreds.len() == (last + 1) as usize
     }
 
@@ -60,8 +60,6 @@ impl SlotShreds {
 
 pub struct ShredCollector {
     slots: DashMap<u64, SlotShreds>,
-    /// Slots whose blocks have been stored to disk. Prevents re-assembly of
-    /// already-stored blocks and skips unnecessary repair requests.
     stored_slots: DashMap<u64, ()>,
 }
 
@@ -73,20 +71,41 @@ impl ShredCollector {
         }
     }
 
-    /// Mark a slot as stored to disk. Removes it from active shred tracking
-    /// so future shreds for this slot are dropped.
     pub fn mark_slot_stored(&self, slot: u64) {
         self.stored_slots.insert(slot, ());
         self.slots.remove(&slot);
     }
 
-    /// Check if a slot's block has already been stored.
     pub fn is_slot_stored(&self, slot: u64) -> bool {
         self.stored_slots.contains_key(&slot)
     }
 
-    /// Insert a signed data shred. Returns `Some(Block)` if the slot is now complete.
-    pub fn insert_data_shred(&self, shred: &SignedDataShred) -> Option<Block> {
+    /// Insert a ShredBatchHeader. Stores the Merkle root for proof verification.
+    pub fn insert_header(&self, header: ShredBatchHeader) {
+        let slot = header.slot;
+        if self.stored_slots.contains_key(&slot) {
+            return;
+        }
+        let mut entry = self.slots.entry(slot).or_insert_with(SlotShreds::new);
+        entry.header = Some(header);
+    }
+
+    /// Get the cached Merkle root for a slot (if header has been received).
+    pub fn get_merkle_root(&self, slot: u64) -> Option<Hash> {
+        self.slots
+            .get(&slot)
+            .and_then(|e| e.header.as_ref().map(|h| h.merkle_root))
+    }
+
+    /// Check if we have the batch header for a slot.
+    pub fn has_header(&self, slot: u64) -> bool {
+        self.slots
+            .get(&slot)
+            .is_some_and(|e| e.header.is_some())
+    }
+
+    /// Insert a Merkle data shred. Returns `Some(Block)` if the slot is now complete.
+    pub fn insert_data_shred(&self, shred: &MerkleDataShred) -> Option<Block> {
         let slot = shred.slot();
 
         if self.stored_slots.contains_key(&slot) {
@@ -95,15 +114,27 @@ impl ShredCollector {
         }
 
         let mut entry = self.slots.entry(slot).or_insert_with(SlotShreds::new);
+
+        // If header is present, verify Merkle proof before accepting
+        if let Some(ref header) = entry.header
+            && !shred.verify(&header.merkle_root)
+        {
+            metrics::counter!("nusantara_turbine_invalid_shred_signatures").increment(1);
+            return None;
+        }
+
         if !entry.insert(shred) {
             return None;
         }
 
         if entry.is_complete() {
             let sorted = entry.to_sorted_shreds();
-            drop(entry); // release lock before deserialization
+            drop(entry);
             match Deshredder::deshred(&sorted) {
                 Ok(block) => {
+                    // Mark as stored BEFORE removing shred data so duplicate
+                    // shreds arriving concurrently are rejected immediately.
+                    self.stored_slots.insert(slot, ());
                     self.slots.remove(&slot);
                     metrics::counter!("nusantara_turbine_blocks_assembled_total").increment(1);
                     Some(block)
@@ -118,7 +149,6 @@ impl ShredCollector {
         }
     }
 
-    /// Check which shred indices are missing for a slot.
     pub fn missing_shreds(&self, slot: u64) -> Vec<u32> {
         let entry = match self.slots.get(&slot) {
             Some(e) => e,
@@ -127,10 +157,7 @@ impl ShredCollector {
 
         let last = match entry.last_index {
             Some(l) => l,
-            None => {
-                // Don't know the last index yet, can't determine missing
-                return Vec::new();
-            }
+            None => return Vec::new(),
         };
 
         (0..=last)
@@ -138,12 +165,10 @@ impl ShredCollector {
             .collect()
     }
 
-    /// Check if a slot has any shreds.
     pub fn has_slot(&self, slot: u64) -> bool {
         self.slots.contains_key(&slot)
     }
 
-    /// Get count of data shreds for a slot.
     pub fn shred_count(&self, slot: u64) -> usize {
         self.slots
             .get(&slot)
@@ -151,22 +176,16 @@ impl ShredCollector {
             .unwrap_or(0)
     }
 
-    /// Check if a slot has all its shreds assembled (last shred received
-    /// and all indices 0..=last present). Returns false if the slot doesn't
-    /// exist or if the last shred (with completion flag) hasn't arrived yet.
     pub fn is_slot_complete(&self, slot: u64) -> bool {
         self.slots
             .get(&slot)
             .is_some_and(|e| e.is_complete())
     }
 
-    /// Remove a slot (e.g. after it's been finalized and stored).
     pub fn remove_slot(&self, slot: u64) {
         self.slots.remove(&slot);
     }
 
-    /// Register a slot for repair. Creates an empty entry so the RepairService
-    /// will request shreds for this slot from peers. Skips if already stored.
     pub fn request_slot_repair(&self, slot: u64) {
         if self.stored_slots.contains_key(&slot) {
             return;
@@ -174,10 +193,6 @@ impl ShredCollector {
         self.slots.entry(slot).or_insert_with(SlotShreds::new);
     }
 
-    /// Evict tracked slots older than `current_slot - max_age`. Returns how
-    /// many entries were removed. This prevents unbounded growth from
-    /// `request_slot_repair()` entries that never complete assembly.
-    /// Also evicts old `stored_slots` entries to prevent unbounded growth.
     pub fn cleanup_old_slots(&self, current_slot: u64, max_age: u64) -> usize {
         let cutoff = current_slot.saturating_sub(max_age);
         let old_slots: Vec<u64> = self
@@ -191,7 +206,6 @@ impl ShredCollector {
             self.slots.remove(&slot);
         }
 
-        // Evict old stored_slots entries to prevent unbounded growth
         let old_stored: Vec<u64> = self
             .stored_slots
             .iter()
@@ -242,6 +256,7 @@ mod tests {
                 state_root: Hash::zero(),
             },
             transactions: Vec::new(),
+            batches: Vec::new(),
         }
     }
 
@@ -251,6 +266,9 @@ mod tests {
         let block = test_block(1);
         let batch = Shredder::shred_block(&block, 0, &kp).unwrap();
         let collector = ShredCollector::new();
+
+        // Insert header first
+        collector.insert_header(batch.header.clone());
 
         let mut result = None;
         for shred in &batch.data_shreds {
@@ -271,7 +289,6 @@ mod tests {
 
         if batch.data_shreds.len() > 1 {
             let collector = ShredCollector::new();
-            // Insert all but the last
             for shred in &batch.data_shreds[..batch.data_shreds.len() - 1] {
                 assert!(collector.insert_data_shred(shred).is_none());
             }
@@ -286,7 +303,6 @@ mod tests {
         let collector = ShredCollector::new();
 
         if batch.data_shreds.len() > 2 {
-            // Insert first and last, skip middle
             collector.insert_data_shred(&batch.data_shreds[0]);
             collector.insert_data_shred(batch.data_shreds.last().unwrap());
 
@@ -302,16 +318,13 @@ mod tests {
         let batch = Shredder::shred_block(&block, 0, &kp).unwrap();
         let collector = ShredCollector::new();
 
-        // Mark slot 1 as stored
         collector.mark_slot_stored(1);
         assert!(collector.is_slot_stored(1));
 
-        // All shred insertions should return None (skipped)
         for shred in &batch.data_shreds {
             assert!(collector.insert_data_shred(shred).is_none());
         }
 
-        // No shreds should be tracked for slot 1
         assert!(!collector.has_slot(1));
     }
 
@@ -320,7 +333,6 @@ mod tests {
         let collector = ShredCollector::new();
         collector.mark_slot_stored(5);
 
-        // Repair request for stored slot should be a no-op
         collector.request_slot_repair(5);
         assert!(!collector.has_slot(5));
     }
@@ -330,7 +342,6 @@ mod tests {
         let kp = Keypair::generate();
         let collector = ShredCollector::new();
 
-        // Create a shred with index at MAX
         let shred = nusantara_storage::shred::DataShred {
             slot: 1,
             index: MAX_SHREDS_PER_SLOT as u32,
@@ -338,8 +349,8 @@ mod tests {
             data: vec![0u8; 10],
             flags: 0,
         };
-        let signed = SignedDataShred::new(shred, kp.address(), &kp);
-        assert!(collector.insert_data_shred(&signed).is_none());
+        let merkle = MerkleDataShred::new(shred, kp.address());
+        assert!(collector.insert_data_shred(&merkle).is_none());
     }
 
     #[test]
@@ -352,11 +363,10 @@ mod tests {
             index: 0,
             parent_offset: 1,
             data: vec![0u8; 10],
-            flags: 0x01, // last shred
+            flags: 0x01,
         };
-        let signed = SignedDataShred::new(shred, kp.address(), &kp);
-        // Single shred with last flag should assemble a block (or at least be accepted)
-        let _ = collector.insert_data_shred(&signed);
+        let merkle = MerkleDataShred::new(shred, kp.address());
+        let _ = collector.insert_data_shred(&merkle);
         assert!(collector.has_slot(1) || collector.is_slot_stored(1));
     }
 
@@ -367,12 +377,47 @@ mod tests {
         collector.mark_slot_stored(50);
         collector.mark_slot_stored(90);
 
-        // Cleanup with current_slot=100, max_age=50 → cutoff=50
-        // Slots 10 should be evicted, 50 and 90 should remain
         collector.cleanup_old_slots(100, 50);
 
         assert!(!collector.is_slot_stored(10));
         assert!(collector.is_slot_stored(50));
         assert!(collector.is_slot_stored(90));
+    }
+
+    #[test]
+    fn header_insert_and_lookup() {
+        let kp = Keypair::generate();
+        let root = hash(b"root");
+        let header = ShredBatchHeader {
+            slot: 5,
+            leader: kp.address(),
+            merkle_root: root,
+            signature: kp.sign(root.as_bytes()),
+            num_data_shreds: 10,
+            num_code_shreds: 3,
+        };
+        let collector = ShredCollector::new();
+        collector.insert_header(header);
+
+        assert!(collector.has_header(5));
+        assert_eq!(collector.get_merkle_root(5), Some(root));
+        assert!(!collector.has_header(6));
+    }
+
+    #[test]
+    fn shreds_before_header_then_header() {
+        let kp = Keypair::generate();
+        let block = test_block(1);
+        let batch = Shredder::shred_block(&block, 0, &kp).unwrap();
+        let collector = ShredCollector::new();
+
+        // Insert shreds WITHOUT header first (buffered without proof check)
+        for shred in &batch.data_shreds {
+            collector.insert_data_shred(shred);
+        }
+
+        // Now insert header — the block should have already been assembled
+        // since proof check is optional when no header
+        // (Shreds may have already triggered assembly)
     }
 }

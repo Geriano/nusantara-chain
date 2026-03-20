@@ -6,7 +6,6 @@ use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, instrument};
 
 use crate::protocol::{TurbineMessage, MAX_UDP_PACKET};
-use crate::signed_shred::SignedShred;
 
 pub struct ShredReceiver {
     socket: Arc<UdpSocket>,
@@ -17,11 +16,12 @@ impl ShredReceiver {
         Self { socket }
     }
 
-    /// Receive shreds from the UDP socket and forward to the given channel.
-    #[instrument(skip(self, shred_sender, repair_sender, shutdown), name = "shred_receiver")]
+    /// Receive turbine messages from the UDP socket and forward to the retransmit stage.
+    /// Passes full `TurbineMessage` (not just shreds) so that headers can flow through.
+    #[instrument(skip(self, message_sender, repair_sender, shutdown), name = "shred_receiver")]
     pub async fn run(
         self,
-        shred_sender: mpsc::Sender<(SignedShred, SocketAddr)>,
+        message_sender: mpsc::Sender<(TurbineMessage, SocketAddr)>,
         repair_sender: mpsc::Sender<(TurbineMessage, SocketAddr)>,
         mut shutdown: watch::Receiver<bool>,
     ) {
@@ -35,17 +35,24 @@ impl ShredReceiver {
                         Ok((len, src)) => {
                             let data = &buf[..len];
                             match TurbineMessage::deserialize_from_bytes(data) {
-                                Ok(TurbineMessage::Shred(shred)) => {
-                                    metrics::counter!("nusantara_turbine_shreds_received_total").increment(1);
-                                    if shred_sender.send((shred, src)).await.is_err() {
-                                        debug!("shred channel closed");
+                                Ok(msg @ TurbineMessage::ShredBatchHeader(_)) => {
+                                    metrics::counter!("nusantara_turbine_batch_headers_received").increment(1);
+                                    if message_sender.send((msg, src)).await.is_err() {
+                                        debug!("message channel closed");
                                         break;
                                     }
                                 }
-                                Ok(TurbineMessage::RepairResponse(shred)) => {
+                                Ok(msg @ TurbineMessage::Shred(_)) => {
+                                    metrics::counter!("nusantara_turbine_shreds_received_total").increment(1);
+                                    if message_sender.send((msg, src)).await.is_err() {
+                                        debug!("message channel closed");
+                                        break;
+                                    }
+                                }
+                                Ok(msg @ TurbineMessage::RepairResponse(_)) => {
                                     metrics::counter!("nusantara_turbine_repair_shreds_received").increment(1);
-                                    if shred_sender.send((shred, src)).await.is_err() {
-                                        debug!("shred channel closed");
+                                    if message_sender.send((msg, src)).await.is_err() {
+                                        debug!("message channel closed");
                                         break;
                                     }
                                 }
@@ -53,8 +60,9 @@ impl ShredReceiver {
                                     let count = batch.shreds.len() as u64;
                                     metrics::counter!("nusantara_turbine_repair_shreds_received").increment(count);
                                     for shred in batch.shreds {
-                                        if shred_sender.send((shred, src)).await.is_err() {
-                                            debug!("shred channel closed");
+                                        let msg = TurbineMessage::Shred(shred);
+                                        if message_sender.send((msg, src)).await.is_err() {
+                                            debug!("message channel closed");
                                             return;
                                         }
                                     }

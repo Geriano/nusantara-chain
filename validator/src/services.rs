@@ -12,8 +12,8 @@ use nusantara_tpu_forward::TpuService;
 use nusantara_turbine::protocol::{RepairRequest, MAX_UDP_PACKET};
 use nusantara_turbine::turbine_tree::TURBINE_FANOUT;
 use nusantara_turbine::{
-    BatchRepairResponse, BroadcastStage, RepairService, RetransmitStage,
-    ShredReceiver, Shredder, SignedShred, TurbineMessage, TurbineTree,
+    BatchRepairResponse, BroadcastStage, MerkleShred, RepairService, RetransmitStage,
+    ShredReceiver, Shredder, TurbineMessage, TurbineTree,
 };
 use std::sync::atomic::Ordering;
 use tokio::net::UdpSocket;
@@ -85,6 +85,7 @@ impl ValidatorNode {
             self.identity,
             Arc::clone(&turbine_socket),
             Arc::clone(&shred_collector),
+            Arc::clone(&current_slot_shared),
         );
         let retransmit_shutdown = shutdown_rx.clone();
 
@@ -318,7 +319,7 @@ fn spawn_repair_responder(
     socket: Arc<UdpSocket>,
     storage: Arc<nusantara_storage::Storage>,
     keypair: Arc<nusantara_crypto::Keypair>,
-    shred_tx: mpsc::Sender<(SignedShred, SocketAddr)>,
+    shred_tx: mpsc::Sender<(TurbineMessage, SocketAddr)>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
@@ -342,7 +343,8 @@ fn spawn_repair_responder(
                                         RepairRequest::Shred { slot, .. }
                                         | RepairRequest::ShredBatch { slot, .. }
                                         | RepairRequest::HighestShred { slot }
-                                        | RepairRequest::Orphan { slot } => *slot,
+                                        | RepairRequest::Orphan { slot }
+                                        | RepairRequest::BatchHeader { slot } => *slot,
                                     };
                                     tracing::debug!(slot, ?request, %src, "received repair request");
 
@@ -379,7 +381,7 @@ fn spawn_repair_responder(
                                                 shred_batch.data_shreds.get(index as usize)
                                             {
                                                 let msg = TurbineMessage::RepairResponse(
-                                                    SignedShred::Data(shred.clone()),
+                                                    MerkleShred::Data(shred.clone()),
                                                 );
                                                 if let Ok(bytes) = msg.serialize_to_bytes() {
                                                     let _ = socket
@@ -389,13 +391,13 @@ fn spawn_repair_responder(
                                             }
                                         }
                                         RepairRequest::ShredBatch { indices, .. } => {
-                                            let shreds: Vec<SignedShred> = indices
+                                            let shreds: Vec<MerkleShred> = indices
                                                 .iter()
                                                 .filter_map(|&i| {
                                                     shred_batch
                                                         .data_shreds
                                                         .get(i as usize)
-                                                        .map(|s| SignedShred::Data(s.clone()))
+                                                        .map(|s| MerkleShred::Data(s.clone()))
                                                 })
                                                 .collect();
                                             let batches = BatchRepairResponse::pack(
@@ -414,13 +416,23 @@ fn spawn_repair_responder(
                                                 }
                                             }
                                         }
+                                        RepairRequest::BatchHeader { .. } => {
+                                            let msg = TurbineMessage::ShredBatchHeader(
+                                                shred_batch.header.clone(),
+                                            );
+                                            if let Ok(bytes) = msg.serialize_to_bytes() {
+                                                let _ = socket
+                                                    .send_to(&bytes, src)
+                                                    .await;
+                                            }
+                                        }
                                         RepairRequest::HighestShred { .. }
                                         | RepairRequest::Orphan { .. } => {
                                             if let Some(last_shred) =
                                                 shred_batch.data_shreds.last()
                                             {
                                                 let msg = TurbineMessage::RepairResponse(
-                                                    SignedShred::Data(last_shred.clone()),
+                                                    MerkleShred::Data(last_shred.clone()),
                                                 );
                                                 if let Ok(bytes) = msg.serialize_to_bytes() {
                                                     let _ = socket
@@ -428,10 +440,10 @@ fn spawn_repair_responder(
                                                         .await;
                                                 }
                                             }
-                                            let shreds: Vec<SignedShred> = shred_batch
+                                            let shreds: Vec<MerkleShred> = shred_batch
                                                 .data_shreds
                                                 .iter()
-                                                .map(|s| SignedShred::Data(s.clone()))
+                                                .map(|s| MerkleShred::Data(s.clone()))
                                                 .collect();
                                             let batches = BatchRepairResponse::pack(
                                                 slot,
@@ -462,7 +474,8 @@ fn spawn_repair_responder(
                                     );
                                     metrics::counter!("nusantara_turbine_repair_shreds_received")
                                         .increment(1);
-                                    let _ = shred_tx.send((shred, src)).await;
+                                    let msg = TurbineMessage::RepairResponse(shred);
+                                    let _ = shred_tx.send((msg, src)).await;
                                 }
                                 Ok(TurbineMessage::BatchRepairResponse(batch)) => {
                                     tracing::debug!(
@@ -475,7 +488,8 @@ fn spawn_repair_responder(
                                     metrics::counter!("nusantara_turbine_repair_shreds_received")
                                         .increment(count);
                                     for shred in batch.shreds {
-                                        let _ = shred_tx.send((shred, src)).await;
+                                        let msg = TurbineMessage::Shred(shred);
+                                        let _ = shred_tx.send((msg, src)).await;
                                     }
                                 }
                                 _ => {}

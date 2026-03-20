@@ -5,8 +5,8 @@ use clap::Parser;
 #[derive(Debug, Clone, Parser)]
 #[command(name = "tps-bench", about = "Nusantara TPS benchmark")]
 pub struct BenchConfig {
-    /// RPC URLs (comma-separated or repeated). Defaults to nginx proxy.
-    #[arg(long, value_delimiter = ',', default_value = "http://localhost:8080")]
+    /// RPC URLs (comma-separated or repeated). Defaults to single-node validator.
+    #[arg(long, value_delimiter = ',', default_value = "http://localhost:8899")]
     pub rpc_urls: Vec<String>,
 
     /// Number of accounts to generate and fund.

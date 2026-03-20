@@ -1,6 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use nusantara_crypto::{Hash, PublicKey, hash as crypto_hash};
 
+use crate::batch_transaction::SignedTransactionBatch;
 use crate::transaction::Transaction;
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -31,6 +32,7 @@ impl BlockHeader {
 pub struct Block {
     pub header: BlockHeader,
     pub transactions: Vec<Transaction>,
+    pub batches: Vec<SignedTransactionBatch>,
 }
 
 #[cfg(test)]
@@ -78,6 +80,7 @@ mod tests {
         let block = Block {
             header,
             transactions: Vec::new(),
+            batches: Vec::new(),
         };
         let encoded = borsh::to_vec(&block).unwrap();
         let decoded: Block = borsh::from_slice(&encoded).unwrap();

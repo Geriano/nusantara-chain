@@ -39,7 +39,7 @@ pub(crate) mod test_helpers {
         let fork_tree = ForkTree::new(0, hash(b"genesis"), hash(b"genesis_bank"));
         let commitment = CommitmentTracker::new(1000);
 
-        let stage = ReplayStage::new(bank, tower, fork_tree, commitment, None);
+        let stage = ReplayStage::new(hash(b"node"), bank, tower, fork_tree, commitment, None);
         (stage, dir)
     }
 
@@ -60,6 +60,7 @@ pub(crate) mod test_helpers {
                 state_root: Hash::zero(),
             },
             transactions: Vec::new(),
+            batches: Vec::new(),
         }
     }
 

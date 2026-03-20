@@ -71,6 +71,7 @@ mod tests {
                 state_root: Hash::zero(),
             },
             transactions: Vec::new(),
+            batches: Vec::new(),
         }
     }
 

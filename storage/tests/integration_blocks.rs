@@ -69,6 +69,7 @@ fn block_with_header_roundtrip() {
     let block = Block {
         header: test_header(42),
         transactions: Vec::new(),
+        batches: Vec::new(),
     };
     storage.put_block(&block).unwrap();
     let loaded = storage.get_block_header(42).unwrap().unwrap();

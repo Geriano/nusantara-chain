@@ -65,24 +65,13 @@ impl ValidatorNode {
                     self.check_epoch_boundary(cli.snapshot_interval).await;
 
                     // Periodically expire mempool transactions with stale blockhashes.
-                    // Use best_slot() (not current_slot) because current_slot may be a
-                    // non-leader slot that isn't in the fork tree, which would produce
-                    // an empty ancestry and incorrectly purge the entire mempool.
+                    // Use the bank's slot_hashes (up to 512 entries, covering ~200s at
+                    // 400ms slots) rather than the fork tree ancestry, which is
+                    // aggressively pruned by set_root and may contain only 8-12 entries.
                     if self.current_slot.is_multiple_of(10) {
-                        let best = self.replay_stage.fork_tree().best_slot();
-                        let ancestry = self
-                            .replay_stage
-                            .fork_tree()
-                            .get_ancestry(best);
-                        let valid_blockhashes: HashSet<Hash> = ancestry
-                            .iter()
-                            .filter_map(|&s| {
-                                self.replay_stage
-                                    .fork_tree()
-                                    .get_node(s)
-                                    .map(|n| n.block_hash)
-                            })
-                            .collect();
+                        let slot_hashes = self.bank.slot_hashes();
+                        let valid_blockhashes: HashSet<Hash> =
+                            slot_hashes.0.iter().map(|(_, h)| *h).collect();
                         self.mempool.remove_expired(&valid_blockhashes);
                     }
 
@@ -218,24 +207,27 @@ impl ValidatorNode {
                 .set_parent(best, node.block_hash, node.bank_hash);
         }
 
-        // 3c. Rebuild slot_hashes and rewind account index from fork tree ancestry.
+        // 3c. Rebuild slot_hashes and rewind account index from fork tree ancestry,
+        //     but ONLY when switching forks. On a linear chain the bank's slot_hashes
+        //     already contain the correct history (record_slot_hash appends each slot).
+        //     Replacing unconditionally would shrink slot_hashes to the fork tree's
+        //     pruned ancestry (often just 1 entry on a single-node validator), causing
+        //     all transactions with a recent blockhash to fail with BlockhashNotFound.
         let parent_slot = self.block_producer.parent_slot();
-        let ancestry = self.replay_stage.fork_tree().get_ancestry(parent_slot);
-        let fork_slot_hashes: Vec<(u64, Hash)> = ancestry
-            .iter()
-            .filter_map(|&s| {
-                self.replay_stage
-                    .fork_tree()
-                    .get_node(s)
-                    .map(|n| (s, n.block_hash))
-            })
-            .collect();
-        self.bank.set_slot_hashes(SlotHashes(fork_slot_hashes));
-
-        // Fork-aware account index rewind — skip when extending a linear chain
-        // (parent is the slot we produced last time, meaning no fork switch).
         let is_linear_extension = self.last_produced_parent == Some(parent_slot);
+        let ancestry = self.replay_stage.fork_tree().get_ancestry(parent_slot);
         if !is_linear_extension {
+            let fork_slot_hashes: Vec<(u64, Hash)> = ancestry
+                .iter()
+                .filter_map(|&s| {
+                    self.replay_stage
+                        .fork_tree()
+                        .get_node(s)
+                        .map(|n| (s, n.block_hash))
+                })
+                .collect();
+            self.bank.set_slot_hashes(SlotHashes(fork_slot_hashes));
+
             let ancestor_set: HashSet<u64> = ancestry.iter().copied().collect();
             let rewound = self
                 .storage

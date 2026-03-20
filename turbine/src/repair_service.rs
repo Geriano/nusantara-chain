@@ -15,8 +15,12 @@ pub const MAX_REPAIR_BATCH_REQUEST: u64 =
     const_parse_u64(env!("NUSA_TURBINE_MAX_REPAIR_BATCH_REQUEST"));
 
 /// Slots older than this relative to current_slot are evicted from the
-/// ShredCollector on each repair tick, breaking infinite repair loops.
+/// ShredCollector on each repair tick.
 const MAX_REPAIR_SLOT_AGE: u64 = 64;
+
+/// Maximum number of slots to request repairs for per tick.
+/// With 200ms tick interval, this paces repair to 20 slots/second.
+const MAX_REPAIR_SLOTS_PER_TICK: usize = 16;
 
 pub struct RepairService {
     socket: Arc<UdpSocket>,
@@ -37,8 +41,6 @@ impl RepairService {
         }
     }
 
-    /// Periodically check for incomplete slots and send repair requests.
-    /// Broadcasts to ALL peers since we don't know which peer produced a given block.
     #[instrument(skip(self, repair_peers_fn, shutdown), name = "repair_service")]
     pub async fn run<F>(
         self,
@@ -60,7 +62,15 @@ impl RepairService {
                         debug!(evicted, current, "evicted stale slots from shred collector");
                     }
 
-                    let slots = self.collector.tracked_slots();
+                    let mut slots = self.collector.tracked_slots();
+                    // Prioritize most recent slots, cap per tick to prevent burst
+                    slots.sort_unstable_by(|a, b| b.cmp(a));
+                    let deferred = slots.len().saturating_sub(MAX_REPAIR_SLOTS_PER_TICK);
+                    if deferred > 0 {
+                        metrics::counter!("nusantara_turbine_repair_slots_deferred").increment(deferred as u64);
+                    }
+                    slots.truncate(MAX_REPAIR_SLOTS_PER_TICK);
+
                     let peers = repair_peers_fn();
 
                     if peers.is_empty() {
@@ -72,10 +82,23 @@ impl RepairService {
                     }
 
                     for slot in &slots {
+                        // Request batch header if missing
+                        if !self.collector.has_header(*slot) && self.collector.shred_count(*slot) > 0 {
+                            let req = TurbineMessage::RepairRequest(
+                                RepairRequest::BatchHeader { slot: *slot },
+                            );
+                            if let Ok(bytes) = req.serialize_to_bytes() {
+                                for peer in &peers {
+                                    let _ = self.socket.send_to(&bytes, peer).await;
+                                }
+                            }
+                            debug!(slot = *slot, "requesting missing batch header");
+                            metrics::counter!("nusantara_turbine_repair_requests_total").increment(1);
+                        }
+
                         let missing = self.collector.missing_shreds(*slot);
 
                         if missing.is_empty() && self.collector.shred_count(*slot) == 0 {
-                            // Slot has no shreds at all — broadcast HighestShred to all peers
                             let req = TurbineMessage::RepairRequest(
                                 RepairRequest::HighestShred { slot: *slot },
                             );
@@ -91,11 +114,8 @@ impl RepairService {
 
                         if missing.is_empty() {
                             if self.collector.is_slot_complete(*slot) {
-                                // Truly complete — block will be / has been assembled
                                 continue;
                             }
-                            // Have some shreds but last_index unknown (last shred missing).
-                            // Re-request HighestShred to discover total shred count.
                             let req = TurbineMessage::RepairRequest(
                                 RepairRequest::HighestShred { slot: *slot },
                             );

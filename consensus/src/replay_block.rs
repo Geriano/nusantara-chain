@@ -89,50 +89,61 @@ impl ReplayStage {
         self.fork_tree
             .add_slot(slot, parent_slot, block_hash, frozen.bank_hash)?;
 
-        // 4. Extract vote transactions and process through Tower
+        // 4. Extract vote transactions and process
+        //
+        // Only our own votes go through the local Tower (lockout enforcement).
+        // Other validators' votes only update fork tree weights and commitment.
         let mut vote_count = 0u64;
         let mut new_root = None;
         let root_slot = self.tower.root_slot().unwrap_or(0);
 
         for tx in &block.transactions {
-            if let Some(vote) = extract_vote_from_transaction(tx) {
-                // Pre-filter: skip votes whose highest slot is at or below our root.
-                // This avoids a burst of VoteTooOld errors when replaying blocks
-                // that contain stale vote history from other validators.
+            if let Some((voter, vote)) = extract_vote_from_transaction(tx) {
                 let highest_vote_slot = vote.slots.last().copied().unwrap_or(0);
                 if highest_vote_slot <= root_slot {
                     continue;
                 }
 
-                // Process through tower
-                match self.tower.process_vote(&vote) {
-                    Ok(result) => {
-                        // Update fork tree with vote
-                        if let Some(&voted_slot) = vote.slots.last() {
-                            let stake = self.bank.get_validator_stake(&block.header.validator);
-                            self.fork_tree.add_vote(voted_slot, stake);
+                let stake = self.bank.get_validator_stake(&voter);
+                let is_own_vote = voter == self.identity;
 
-                            // Update commitment tracker
-                            let voted_block_hash = self
-                                .fork_tree
-                                .get_node(voted_slot)
-                                .map(|n| n.block_hash)
-                                .unwrap_or(vote.hash);
-                            self.commitment_tracker
-                                .record_vote(voted_slot, voted_block_hash, stake);
+                if is_own_vote {
+                    // Process through tower (lockout enforcement)
+                    match self.tower.process_vote(&vote) {
+                        Ok(result) => {
+                            if let Some(&voted_slot) = vote.slots.last() {
+                                self.fork_tree.add_vote(voted_slot, stake);
+                                let voted_block_hash = self
+                                    .fork_tree
+                                    .get_node(voted_slot)
+                                    .map(|n| n.block_hash)
+                                    .unwrap_or(vote.hash);
+                                self.commitment_tracker
+                                    .record_vote(voted_slot, voted_block_hash, stake);
+                            }
+                            if let Some(root) = result.new_root_slot {
+                                new_root = Some(root);
+                                self.commitment_tracker.mark_finalized(root);
+                            }
+                            vote_count += 1;
                         }
-
-                        // Check for root advancement
-                        if let Some(root) = result.new_root_slot {
-                            new_root = Some(root);
-                            self.commitment_tracker.mark_finalized(root);
+                        Err(e) => {
+                            tracing::debug!(?e, "Own vote processing failed, skipping");
                         }
-
-                        vote_count += 1;
                     }
-                    Err(e) => {
-                        tracing::debug!(?e, "Vote processing failed, skipping");
+                } else {
+                    // Other validator's vote — update fork weights only, no lockout check
+                    if let Some(&voted_slot) = vote.slots.last() {
+                        self.fork_tree.add_vote(voted_slot, stake);
+                        let voted_block_hash = self
+                            .fork_tree
+                            .get_node(voted_slot)
+                            .map(|n| n.block_hash)
+                            .unwrap_or(vote.hash);
+                        self.commitment_tracker
+                            .record_vote(voted_slot, voted_block_hash, stake);
                     }
+                    vote_count += 1;
                 }
             }
         }

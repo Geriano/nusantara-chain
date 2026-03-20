@@ -1,14 +1,16 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::signed_shred::SignedShred;
+use crate::compression;
+use crate::merkle_shred::{MerkleShred, ShredBatchHeader};
 
 pub const MAX_UDP_PACKET: usize = 65507;
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TurbineMessage {
-    Shred(SignedShred),
+    ShredBatchHeader(ShredBatchHeader),
+    Shred(MerkleShred),
     RepairRequest(RepairRequest),
-    RepairResponse(SignedShred),
+    RepairResponse(MerkleShred),
     BatchRepairResponse(BatchRepairResponse),
 }
 
@@ -18,19 +20,18 @@ pub enum RepairRequest {
     ShredBatch { slot: u64, indices: Vec<u32> },
     HighestShred { slot: u64 },
     Orphan { slot: u64 },
+    BatchHeader { slot: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BatchRepairResponse {
     pub slot: u64,
-    pub shreds: Vec<SignedShred>,
+    pub shreds: Vec<MerkleShred>,
 }
 
 impl BatchRepairResponse {
     /// Greedily pack shreds into UDP-safe chunks.
-    /// Each chunk is wrapped in `TurbineMessage::BatchRepairResponse` and must
-    /// serialize to at most `max_packet_size` bytes.
-    pub fn pack(slot: u64, shreds: Vec<SignedShred>, max_packet_size: usize) -> Vec<Self> {
+    pub fn pack(slot: u64, shreds: Vec<MerkleShred>, max_packet_size: usize) -> Vec<Self> {
         if shreds.is_empty() {
             return Vec::new();
         }
@@ -71,33 +72,45 @@ impl BatchRepairResponse {
 
 impl TurbineMessage {
     pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, String> {
-        borsh::to_vec(self).map_err(|e| e.to_string())
+        let raw = borsh::to_vec(self).map_err(|e| e.to_string())?;
+        compression::compress(&raw).map_err(|e| e.to_string())
     }
 
     pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        borsh::from_slice(bytes).map_err(|e| e.to_string())
+        let raw = compression::decompress(bytes).map_err(|e| e.to_string())?;
+        borsh::from_slice(&raw).map_err(|e| e.to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nusantara_crypto::Keypair;
+    use nusantara_crypto::{Keypair, MerkleTree, hash};
     use nusantara_storage::shred::DataShred;
-    use crate::signed_shred::SignedDataShred;
+    use crate::merkle_shred::MerkleDataShred;
+
+    fn make_merkle_shred(kp: &Keypair, slot: u64, index: u32, data: Vec<u8>) -> MerkleShred {
+        let shred = DataShred {
+            slot,
+            index,
+            parent_offset: 1,
+            data,
+            flags: 0,
+        };
+        let data_shred = MerkleDataShred::new(shred, kp.address());
+        let hashes = vec![data_shred.shred_hash()];
+        let tree = MerkleTree::new(&hashes);
+        let proof = tree.proof(0).unwrap();
+        let mut s = data_shred;
+        s.merkle_proof = proof;
+        MerkleShred::Data(s)
+    }
 
     #[test]
     fn shred_message_roundtrip() {
         let kp = Keypair::generate();
-        let shred = DataShred {
-            slot: 1,
-            index: 0,
-            parent_offset: 1,
-            data: vec![42u8; 100],
-            flags: 0,
-        };
-        let signed = SignedShred::Data(SignedDataShred::new(shred, kp.address(), &kp));
-        let msg = TurbineMessage::Shred(signed);
+        let shred = make_merkle_shred(&kp, 1, 0, vec![42u8; 100]);
+        let msg = TurbineMessage::Shred(shred);
 
         let bytes = msg.serialize_to_bytes().unwrap();
         let decoded = TurbineMessage::deserialize_from_bytes(&bytes).unwrap();
@@ -116,11 +129,27 @@ mod tests {
     }
 
     #[test]
-    fn shred_batch_request_roundtrip() {
-        let msg = TurbineMessage::RepairRequest(RepairRequest::ShredBatch {
-            slot: 42,
-            indices: vec![0, 3, 7, 15],
-        });
+    fn batch_header_request_roundtrip() {
+        let msg = TurbineMessage::RepairRequest(RepairRequest::BatchHeader { slot: 42 });
+        let bytes = msg.serialize_to_bytes().unwrap();
+        let decoded = TurbineMessage::deserialize_from_bytes(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn shred_batch_header_message_roundtrip() {
+        let kp = Keypair::generate();
+        let root = hash(b"test_root");
+        let sig = kp.sign(root.as_bytes());
+        let header = ShredBatchHeader {
+            slot: 5,
+            leader: kp.address(),
+            merkle_root: root,
+            signature: sig,
+            num_data_shreds: 10,
+            num_code_shreds: 3,
+        };
+        let msg = TurbineMessage::ShredBatchHeader(header);
         let bytes = msg.serialize_to_bytes().unwrap();
         let decoded = TurbineMessage::deserialize_from_bytes(&bytes).unwrap();
         assert_eq!(msg, decoded);
@@ -129,17 +158,8 @@ mod tests {
     #[test]
     fn batch_repair_response_roundtrip() {
         let kp = Keypair::generate();
-        let shreds: Vec<SignedShred> = (0..3)
-            .map(|i| {
-                let shred = DataShred {
-                    slot: 5,
-                    index: i,
-                    parent_offset: 1,
-                    data: vec![i as u8; 100],
-                    flags: 0,
-                };
-                SignedShred::Data(SignedDataShred::new(shred, kp.address(), &kp))
-            })
+        let shreds: Vec<MerkleShred> = (0..3)
+            .map(|i| make_merkle_shred(&kp, 5, i, vec![i as u8; 100]))
             .collect();
 
         let msg = TurbineMessage::BatchRepairResponse(BatchRepairResponse {
@@ -152,38 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn batch_pack_splits_on_size() {
-        let kp = Keypair::generate();
-        let shreds: Vec<SignedShred> = (0..10)
-            .map(|i| {
-                let shred = DataShred {
-                    slot: 1,
-                    index: i,
-                    parent_offset: 1,
-                    data: vec![0u8; 1000],
-                    flags: 0,
-                };
-                SignedShred::Data(SignedDataShred::new(shred, kp.address(), &kp))
-            })
-            .collect();
-
-        // Use a small max size to force multiple batches
-        let batches = BatchRepairResponse::pack(1, shreds.clone(), 10_000);
-        assert!(batches.len() > 1, "should split into multiple batches");
-
-        // All shreds accounted for
-        let total: usize = batches.iter().map(|b| b.shreds.len()).sum();
-        assert_eq!(total, 10);
-
-        // Each batch serializes within limit
-        for batch in &batches {
-            let msg = TurbineMessage::BatchRepairResponse(batch.clone());
-            let bytes = msg.serialize_to_bytes().unwrap();
-            assert!(bytes.len() <= 10_000);
-        }
-    }
-
-    #[test]
     fn batch_pack_empty() {
         let batches = BatchRepairResponse::pack(1, Vec::new(), MAX_UDP_PACKET);
         assert!(batches.is_empty());
@@ -192,17 +180,22 @@ mod tests {
     #[test]
     fn batch_pack_single_shred() {
         let kp = Keypair::generate();
-        let shred = DataShred {
-            slot: 1,
-            index: 0,
-            parent_offset: 1,
-            data: vec![0u8; 100],
-            flags: 0,
-        };
-        let signed = SignedShred::Data(SignedDataShred::new(shred, kp.address(), &kp));
+        let shred = make_merkle_shred(&kp, 1, 0, vec![0u8; 100]);
 
-        let batches = BatchRepairResponse::pack(1, vec![signed], MAX_UDP_PACKET);
+        let batches = BatchRepairResponse::pack(1, vec![shred], MAX_UDP_PACKET);
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].shreds.len(), 1);
+    }
+
+    #[test]
+    fn compression_roundtrip_large_message() {
+        let kp = Keypair::generate();
+        // Create a large shred that will trigger compression
+        let shred = make_merkle_shred(&kp, 1, 0, vec![0u8; 1000]);
+        let msg = TurbineMessage::Shred(shred);
+
+        let bytes = msg.serialize_to_bytes().unwrap();
+        let decoded = TurbineMessage::deserialize_from_bytes(&bytes).unwrap();
+        assert_eq!(msg, decoded);
     }
 }

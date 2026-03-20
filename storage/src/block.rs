@@ -214,6 +214,7 @@ mod tests {
         let block = Block {
             header: test_header(1),
             transactions: Vec::new(),
+            batches: Vec::new(),
         };
         storage.put_block(&block).unwrap();
         let loaded = storage.get_block_header(1).unwrap().unwrap();
@@ -234,6 +235,7 @@ mod tests {
         let block = Block {
             header: test_header(10),
             transactions: Vec::new(),
+            batches: Vec::new(),
         };
         storage.put_block(&block).unwrap();
         assert!(storage.has_block_header(10).unwrap());

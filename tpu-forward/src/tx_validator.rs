@@ -1,3 +1,4 @@
+use nusantara_core::batch_transaction::SignedTransactionBatch;
 use nusantara_core::native_token::const_parse_u64;
 use nusantara_core::transaction::Transaction;
 
@@ -74,6 +75,57 @@ impl TxValidator {
             return Err(TpuError::InvalidTransaction(format!(
                 "signature verification failed: {e}"
             )));
+        }
+
+        Ok(())
+    }
+
+    /// Validate a signed transaction batch.
+    /// 1 Dilithium3 verify + N Merkle proof verifies + structural checks.
+    pub fn validate_batch(
+        batch: &SignedTransactionBatch,
+        raw_size: usize,
+    ) -> Result<(), TpuError> {
+        if batch.entries.is_empty() {
+            return Err(TpuError::InvalidBatch("empty batch".to_string()));
+        }
+
+        if raw_size > MAX_TRANSACTION_SIZE as usize * batch.entries.len() {
+            return Err(TpuError::TransactionTooLarge {
+                size: raw_size,
+                max_size: MAX_TRANSACTION_SIZE as usize * batch.entries.len(),
+            });
+        }
+
+        // Verify batch signature (1 Dilithium3 verify)
+        if !batch.verify_signature() {
+            metrics::counter!("nusantara_tpu_signature_failures_total").increment(1);
+            return Err(TpuError::InvalidBatch(
+                "batch signature verification failed".to_string(),
+            ));
+        }
+
+        // Verify all Merkle proofs
+        if !batch.verify_all() {
+            return Err(TpuError::InvalidBatch(
+                "batch merkle proof verification failed".to_string(),
+            ));
+        }
+
+        // Structural validation on each message
+        for (i, entry) in batch.entries.iter().enumerate() {
+            if entry.message.account_keys.is_empty() {
+                return Err(TpuError::InvalidBatch(format!(
+                    "batch entry {i}: no account keys"
+                )));
+            }
+            for ix in &entry.message.instructions {
+                if ix.program_id_index as usize >= entry.message.account_keys.len() {
+                    return Err(TpuError::InvalidBatch(format!(
+                        "batch entry {i}: invalid program_id_index"
+                    )));
+                }
+            }
         }
 
         Ok(())

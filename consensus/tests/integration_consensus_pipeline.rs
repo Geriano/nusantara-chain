@@ -53,7 +53,7 @@ fn setup_pipeline() -> (ReplayStage, tempfile::TempDir) {
     let fork_tree = ForkTree::new(0, hash(b"genesis"), hash(b"genesis_bank"));
     let commitment = CommitmentTracker::new(bank.total_active_stake());
 
-    let stage = ReplayStage::new(bank, tower, fork_tree, commitment, None);
+    let stage = ReplayStage::new(validator, bank, tower, fork_tree, commitment, None);
     (stage, dir)
 }
 
@@ -73,6 +73,7 @@ fn make_block(slot: u64, parent_slot: u64, validator: Hash) -> Block {
             state_root: Hash::zero(),
         },
         transactions: Vec::new(),
+        batches: Vec::new(),
     }
 }
 
@@ -206,7 +207,7 @@ fn test_consensus_pipeline_storage_persistence() {
         let tower = Tower::new(VoteState::new(&init));
         let fork_tree = ForkTree::new(0, hash(b"genesis"), hash(b"genesis_bank"));
         let commitment = CommitmentTracker::new(0);
-        let mut stage = ReplayStage::new(bank, tower, fork_tree, commitment, None);
+        let mut stage = ReplayStage::new(validator, bank, tower, fork_tree, commitment, None);
 
         for slot in 1..=5 {
             let block = make_block(slot, slot - 1, validator);

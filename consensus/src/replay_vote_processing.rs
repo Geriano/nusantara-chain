@@ -13,11 +13,16 @@ impl ReplayStage {
     }
 }
 
-/// Extract a Vote from a transaction by looking for vote program instructions.
+/// Extract a Vote and the voter's identity from a transaction.
+///
+/// The voter identity is `account_keys[0]` (fee payer), which is the validator's
+/// identity address for vote transactions built by `build_vote_transaction`.
 pub(crate) fn extract_vote_from_transaction(
     tx: &nusantara_core::transaction::Transaction,
-) -> Option<Vote> {
+) -> Option<(Hash, Vote)> {
     use nusantara_core::program::VOTE_PROGRAM_ID;
+
+    let voter = *tx.message.account_keys.first()?;
 
     for ix in &tx.message.instructions {
         let program_id = tx
@@ -28,8 +33,8 @@ pub(crate) fn extract_vote_from_transaction(
             && let Ok(vote_ix) = borsh::from_slice::<VoteInstruction>(&ix.data)
         {
             match vote_ix {
-                VoteInstruction::Vote(vote) => return Some(vote),
-                VoteInstruction::SwitchVote(vote, _) => return Some(vote),
+                VoteInstruction::Vote(vote) => return Some((voter, vote)),
+                VoteInstruction::SwitchVote(vote, _) => return Some((voter, vote)),
                 _ => {}
             }
         }

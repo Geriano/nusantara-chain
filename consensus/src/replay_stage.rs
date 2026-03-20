@@ -33,6 +33,7 @@ pub struct ForkSwitchPlan {
 }
 
 pub struct ReplayStage {
+    pub(crate) identity: Hash,
     pub(crate) bank: Arc<ConsensusBank>,
     pub(crate) tower: Tower,
     pub(crate) fork_tree: ForkTree,
@@ -45,6 +46,7 @@ pub struct ReplayStage {
 
 impl ReplayStage {
     pub fn new(
+        identity: Hash,
         bank: Arc<ConsensusBank>,
         tower: Tower,
         fork_tree: ForkTree,
@@ -54,6 +56,7 @@ impl ReplayStage {
         let epoch_schedule = bank.epoch_schedule().clone();
         let initial_tip = fork_tree.root_slot();
         Self {
+            identity,
             bank,
             tower,
             fork_tree,

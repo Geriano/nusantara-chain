@@ -1,4 +1,5 @@
 pub mod error;
+pub mod compression;
 pub mod protocol;
 pub mod rate_limiter;
 pub mod tx_validator;

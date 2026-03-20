@@ -141,6 +141,7 @@ impl BlockProducer {
                 state_root,
             },
             transactions,
+            batches: Vec::new(),
         };
 
         // 11. Prepare pending block storage (deferred to async background)

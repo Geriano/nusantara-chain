@@ -37,4 +37,13 @@ pub enum TpuError {
 
     #[error("connection cache error: {0}")]
     ConnectionCache(String),
+
+    #[error("compression error: {0}")]
+    Compression(String),
+
+    #[error("decompression error: {0}")]
+    Decompression(String),
+
+    #[error("invalid batch: {0}")]
+    InvalidBatch(String),
 }
