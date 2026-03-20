@@ -48,7 +48,12 @@ impl ValidatorNode {
         let identity_address = keypair.address();
         info!(identity = %identity_address.to_base64(), "identity loaded");
 
-        // 2b. Attempt snapshot restore before genesis
+        // 2b. Check for and clean up a partial snapshot restore from a prior crash
+        if nusantara_storage::snapshot_archive::cleanup_partial_snapshot_restore(&storage)? {
+            warn!("detected partial snapshot restore from previous crash — cleaned up marker");
+        }
+
+        // 2c. Attempt snapshot restore before genesis
         let snapshot_dir = Path::new(&cli.ledger_path).join("snapshots");
         if storage.get_cf(CF_DEFAULT, GENESIS_HASH_KEY)?.is_none()
             && let Some(snapshot_path) =

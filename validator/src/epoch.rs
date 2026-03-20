@@ -4,7 +4,7 @@ use nusantara_consensus::bank::ConsensusBank;
 use nusantara_core::EpochSchedule;
 use nusantara_crypto::Hash;
 use nusantara_rent_program::{Rent, RentDue};
-use nusantara_storage::Storage;
+use nusantara_storage::{Storage, StorageWriteBatch};
 use tracing::{info, warn};
 
 use crate::constants::{MS_PER_YEAR, RENT_PARTITIONS};
@@ -155,6 +155,11 @@ impl ValidatorNode {
 }
 
 /// Freestanding rent collection to run in a blocking thread.
+///
+/// All rent-adjusted account writes are accumulated into a single
+/// `StorageWriteBatch` and committed atomically. On commit failure the
+/// fees are NOT burned, preventing an inconsistency between burned fees
+/// and the actual on-disk account balances.
 fn collect_rent_blocking(
     storage: &Storage,
     bank: &ConsensusBank,
@@ -169,6 +174,8 @@ fn collect_rent_blocking(
 
     let ms_per_epoch =
         epoch_schedule.slots_per_epoch * nusantara_core::DEFAULT_SLOT_DURATION_MS;
+
+    let mut batch = StorageWriteBatch::new();
 
     if let Ok(accounts) = storage.get_accounts_in_partition(partition, RENT_PARTITIONS) {
         for (address, mut account) in accounts {
@@ -186,6 +193,8 @@ fn collect_rent_blocking(
                 continue;
             }
 
+            let old_account = account.clone();
+
             if account.lamports <= rent_due {
                 rent_collected += account.lamports;
                 account.lamports = 0;
@@ -196,20 +205,45 @@ fn collect_rent_blocking(
                 rent_collected += rent_due;
             }
 
-            let _ = storage.put_account(&address, current_slot, &account);
+            Storage::append_account_write_with_old(
+                &mut batch,
+                &address,
+                current_slot,
+                &account,
+                Some(&old_account),
+            );
         }
     }
 
     if rent_collected > 0 {
-        bank.burn_fees(rent_collected);
-        info!(
-            epoch,
-            partition, rent_collected, accounts_closed, "rent collected"
-        );
+        // Commit all rent-adjusted accounts atomically before burning fees.
+        // If the commit fails, we do NOT burn fees (avoiding an inconsistency
+        // between the fee sink and the actual account balances).
+        match storage.write(&batch) {
+            Ok(()) => {
+                bank.burn_fees(rent_collected);
+                info!(
+                    epoch,
+                    partition, rent_collected, accounts_closed, "rent collected"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    epoch,
+                    partition,
+                    "atomic rent collection commit failed — fees NOT burned"
+                );
+            }
+        }
     }
 }
 
 /// Freestanding reward distribution to run in a blocking thread.
+///
+/// All reward account writes are accumulated into a single `StorageWriteBatch`
+/// and committed atomically. Bank state (delegation stakes, total supply) is
+/// only updated after the storage commit succeeds.
 fn distribute_epoch_rewards_blocking(
     storage: &Storage,
     bank: &ConsensusBank,
@@ -235,21 +269,26 @@ fn distribute_epoch_rewards_blocking(
         &delegations,
     ) {
         Ok(rewards) => {
+            let mut batch = StorageWriteBatch::new();
             let mut total_distributed = 0u64;
+            // Collect bank updates to apply only after successful commit.
+            let mut delegation_updates: Vec<(Hash, u64)> = Vec::new();
+
             for partition in &rewards.partitions {
                 for entry in partition {
                     if let Ok(Some(mut account)) =
                         storage.get_account(&entry.stake_account)
                     {
+                        let old_account = account.clone();
                         account.lamports = account.lamports.saturating_add(entry.lamports);
-                        if let Err(e) = storage.put_account(
+                        Storage::append_account_write_with_old(
+                            &mut batch,
                             &entry.stake_account,
                             current_slot,
                             &account,
-                        ) {
-                            warn!(error = %e, "failed to credit staker reward");
-                        }
-                        bank.update_delegation_stake(&entry.stake_account, account.lamports);
+                            Some(&old_account),
+                        );
+                        delegation_updates.push((entry.stake_account, account.lamports));
                     }
                     total_distributed += entry.lamports;
 
@@ -257,29 +296,44 @@ fn distribute_epoch_rewards_blocking(
                         if let Ok(Some(mut vote_account)) =
                             storage.get_account(&entry.vote_account)
                         {
+                            let old_vote = vote_account.clone();
                             vote_account.lamports = vote_account
                                 .lamports
                                 .saturating_add(entry.commission_lamports);
-                            if let Err(e) = storage.put_account(
+                            Storage::append_account_write_with_old(
+                                &mut batch,
                                 &entry.vote_account,
                                 current_slot,
                                 &vote_account,
-                            ) {
-                                warn!(error = %e, "failed to credit commission");
-                            }
+                                Some(&old_vote),
+                            );
                         }
                         total_distributed += entry.commission_lamports;
                     }
                 }
             }
 
-            bank.set_total_supply(total_supply.saturating_add(total_distributed));
-
-            info!(
-                epoch,
-                total_rewards = total_distributed,
-                "epoch rewards distributed"
-            );
+            // Commit all reward writes atomically, then update bank state.
+            match storage.write(&batch) {
+                Ok(()) => {
+                    for (stake_account, lamports) in delegation_updates {
+                        bank.update_delegation_stake(&stake_account, lamports);
+                    }
+                    bank.set_total_supply(total_supply.saturating_add(total_distributed));
+                    info!(
+                        epoch,
+                        total_rewards = total_distributed,
+                        "epoch rewards distributed"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        epoch,
+                        error = %e,
+                        "atomic epoch reward commit failed — rewards NOT distributed"
+                    );
+                }
+            }
         }
         Err(e) => {
             warn!(epoch, error = %e, "failed to calculate epoch rewards");

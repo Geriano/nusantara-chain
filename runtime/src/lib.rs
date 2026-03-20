@@ -22,7 +22,7 @@ pub use batch_executor::{SlotExecutionResult, execute_slot};
 pub use compute_meter::ComputeMeter;
 pub use error::RuntimeError;
 pub use nusantara_vm::ProgramCache;
-pub use parallel_executor::execute_slot_parallel;
+pub use parallel_executor::{DeferredSlotExecution, execute_slot_parallel, execute_slot_parallel_deferred};
 pub use scheduler::{ParallelBatch, TransactionScheduler};
 pub use sysvar_cache::{SysvarCache, SysvarCacheBuilder};
 pub use transaction_context::TransactionContext;

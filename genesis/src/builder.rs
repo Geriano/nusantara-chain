@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use nusantara_core::program::{LOADER_PROGRAM_ID, STAKE_PROGRAM_ID, SYSTEM_PROGRAM_ID, VOTE_PROGRAM_ID};
 use nusantara_core::{Account, Block, BlockHeader, EpochSchedule};
@@ -7,10 +9,13 @@ use nusantara_stake_program::{
     Authorized, Delegation, Lockup, Meta, Stake, StakeStateV2,
     DEFAULT_WARMUP_COOLDOWN_RATE_BPS,
 };
-use nusantara_storage::cf::CF_DEFAULT;
-use nusantara_storage::{SlotMeta, Storage};
+use nusantara_storage::cf::{
+    CF_BANK_HASHES, CF_BLOCKS, CF_DEFAULT, CF_ROOTS, CF_SLOT_HASHES, CF_SLOT_META, CF_SYSVARS,
+};
+use nusantara_storage::keys::slot_key;
+use nusantara_storage::{SlotMeta, Storage, StorageWriteBatch};
 use nusantara_sysvar_program::{
-    Clock, EpochScheduleSysvar, RecentBlockhashes, RentSysvar, SlotHashes, StakeHistory,
+    Clock, EpochScheduleSysvar, RecentBlockhashes, RentSysvar, SlotHashes, StakeHistory, Sysvar,
 };
 use nusantara_vote_program::{VoteInit, VoteState};
 use tracing::{info, instrument};
@@ -47,11 +52,30 @@ pub struct GenesisBuilder<'a> {
     storage: &'a Storage,
 }
 
+/// Append a sysvar's serialized form into the batch under `CF_SYSVARS`.
+fn append_sysvar_to_batch<S: Sysvar>(
+    batch: &mut StorageWriteBatch,
+    sysvar: &S,
+) -> Result<(), GenesisError> {
+    let id = S::id();
+    let value =
+        borsh::to_vec(sysvar).map_err(|e| GenesisError::Serialization(e.to_string()))?;
+    batch.put(CF_SYSVARS, id.as_bytes().to_vec(), value);
+    Ok(())
+}
+
 impl<'a> GenesisBuilder<'a> {
     pub fn new(config: &'a GenesisConfig, storage: &'a Storage) -> Self {
         Self { config, storage }
     }
 
+    /// Build genesis state and commit it atomically.
+    ///
+    /// All storage writes (accounts, sysvars, genesis block, slot metadata,
+    /// bank hash, root, genesis marker, and validator info) are accumulated
+    /// into a single `StorageWriteBatch` and committed at the end. This
+    /// guarantees that either the entire genesis is written or none of it,
+    /// preventing partial genesis state on crash.
     #[instrument(skip_all)]
     pub fn build(&self) -> Result<GenesisResult, GenesisError> {
         // Step 1: Check idempotency
@@ -75,11 +99,20 @@ impl<'a> GenesisBuilder<'a> {
         let mut total_stake: u64 = 0;
         let mut validator_infos = Vec::new();
 
+        let mut batch = StorageWriteBatch::new();
+
+        // Track pending account state in-memory so that reads within the same
+        // genesis (e.g., checking if the identity was already funded as the
+        // faucet) see the uncommitted writes. After the batch commits, storage
+        // will be consistent.
+        let mut pending_accounts: HashMap<Hash, Account> = HashMap::new();
+
         // Step 2: Fund initial accounts
         for acc_cfg in &self.config.accounts {
             let addr = GenesisConfig::resolve_address(&acc_cfg.address, b"")?;
             let account = Account::new(acc_cfg.lamports, *SYSTEM_PROGRAM_ID);
-            self.storage.put_account(&addr, 0, &account)?;
+            Storage::append_account_write_with_old(&mut batch, &addr, 0, &account, None);
+            pending_accounts.insert(addr, account);
             total_supply = total_supply
                 .checked_add(acc_cfg.lamports as u128)
                 .ok_or(GenesisError::SupplyOverflow)?;
@@ -98,15 +131,15 @@ impl<'a> GenesisBuilder<'a> {
                 );
                 keypair_bytes.extend_from_slice(keypair.public_key().as_bytes());
                 keypair_bytes.extend_from_slice(keypair.secret_key().as_bytes());
-                self.storage
-                    .put_cf(CF_DEFAULT, FAUCET_KEYPAIR_KEY, &keypair_bytes)?;
+                batch.put(CF_DEFAULT, FAUCET_KEYPAIR_KEY.to_vec(), keypair_bytes);
                 info!("persisted faucet keypair to storage");
                 addr
             } else {
                 GenesisConfig::resolve_address(&faucet.address, b"")?
             };
             let account = Account::new(faucet.lamports, *SYSTEM_PROGRAM_ID);
-            self.storage.put_account(&addr, 0, &account)?;
+            Storage::append_account_write_with_old(&mut batch, &addr, 0, &account, None);
+            pending_accounts.insert(addr, account);
             total_supply = total_supply
                 .checked_add(faucet.lamports as u128)
                 .ok_or(GenesisError::SupplyOverflow)?;
@@ -136,9 +169,9 @@ impl<'a> GenesisBuilder<'a> {
             let vote_rent = rent.minimum_balance(vote_data.len());
             let mut vote_account = Account::new(vote_rent, *VOTE_PROGRAM_ID);
             vote_account.data = vote_data;
-            self.storage.put_account(&vote_addr, 0, &vote_account)?;
+            Storage::append_account_write_with_old(&mut batch, &vote_addr, 0, &vote_account, None);
 
-            // Create stake account — serialize placeholder to get data size
+            // Create stake account -- serialize placeholder to get data size
             let placeholder_state = StakeStateV2::Stake(
                 Meta {
                     rent_exempt_reserve: 0,
@@ -197,22 +230,36 @@ impl<'a> GenesisBuilder<'a> {
             let mut stake_account =
                 Account::new(v_cfg.stake_lamports + stake_rent, *STAKE_PROGRAM_ID);
             stake_account.data = stake_data;
-            self.storage
-                .put_account(&stake_addr, 0, &stake_account)?;
+            Storage::append_account_write_with_old(
+                &mut batch,
+                &stake_addr,
+                0,
+                &stake_account,
+                None,
+            );
 
             // Fund identity account: rent-exempt minimum + 10 NUSA for vote tx fees.
             // Each vote costs lamports_per_signature (5000) per slot.
-            // 10 NUSA = 10_000_000_000 lamports ≈ 2M vote fees.
+            // 10 NUSA = 10_000_000_000 lamports = ~2M vote fees.
             //
             // If the identity address was already funded (e.g. as the faucet), add to
-            // the existing balance instead of overwriting it.
+            // the existing balance instead of overwriting it. Check pending accounts
+            // first (for in-batch visibility), then fall back to storage.
             let identity_lamports = rent.minimum_balance(0) + 10_000_000_000;
-            let identity_account = if let Some(existing) = self.storage.get_account(&identity)? {
-                Account::new(existing.lamports + identity_lamports, *SYSTEM_PROGRAM_ID)
+            let existing = pending_accounts.get(&identity);
+            let identity_account = if let Some(existing_acc) = existing {
+                Account::new(existing_acc.lamports + identity_lamports, *SYSTEM_PROGRAM_ID)
             } else {
                 Account::new(identity_lamports, *SYSTEM_PROGRAM_ID)
             };
-            self.storage.put_account(&identity, 0, &identity_account)?;
+            Storage::append_account_write_with_old(
+                &mut batch,
+                &identity,
+                0,
+                &identity_account,
+                existing,
+            );
+            pending_accounts.insert(identity, identity_account);
 
             let validator_lamports =
                 v_cfg.stake_lamports as u128 + stake_rent as u128 + vote_rent as u128 + identity_lamports as u128;
@@ -241,8 +288,7 @@ impl<'a> GenesisBuilder<'a> {
         // Store validator info for validator boot
         let validators_data = borsh::to_vec(&validator_infos)
             .map_err(|e| GenesisError::Serialization(e.to_string()))?;
-        self.storage
-            .put_cf(CF_DEFAULT, VALIDATORS_KEY, &validators_data)?;
+        batch.put(CF_DEFAULT, VALIDATORS_KEY.to_vec(), validators_data);
 
         // Step 5: Write sysvars
         let epoch_schedule = EpochSchedule::new(self.config.epoch.slots_per_epoch);
@@ -254,20 +300,25 @@ impl<'a> GenesisBuilder<'a> {
             leader_schedule_epoch: 1,
             unix_timestamp: creation_time,
         };
-        self.storage.put_sysvar(&clock)?;
-        self.storage.put_sysvar(&RentSysvar(rent))?;
-        self.storage
-            .put_sysvar(&EpochScheduleSysvar(epoch_schedule.clone()))?;
-        self.storage.put_sysvar(&SlotHashes::default())?;
-        self.storage.put_sysvar(&StakeHistory::default())?;
-        self.storage.put_sysvar(&RecentBlockhashes::default())?;
+        append_sysvar_to_batch(&mut batch, &clock)?;
+        append_sysvar_to_batch(&mut batch, &RentSysvar(rent))?;
+        append_sysvar_to_batch(&mut batch, &EpochScheduleSysvar(epoch_schedule.clone()))?;
+        append_sysvar_to_batch(&mut batch, &SlotHashes::default())?;
+        append_sysvar_to_batch(&mut batch, &StakeHistory::default())?;
+        append_sysvar_to_batch(&mut batch, &RecentBlockhashes::default())?;
 
         // Step 6: Register native program accounts
         {
             let loader_id = *LOADER_PROGRAM_ID;
             let mut loader_account = Account::new(1, loader_id);
             loader_account.executable = true;
-            self.storage.put_account(&loader_id, 0, &loader_account)?;
+            Storage::append_account_write_with_old(
+                &mut batch,
+                &loader_id,
+                0,
+                &loader_account,
+                None,
+            );
             info!(address = %loader_id.to_base64(), "registered loader program");
         }
 
@@ -296,7 +347,15 @@ impl<'a> GenesisBuilder<'a> {
             transactions: Vec::new(),
             batches: Vec::new(),
         };
-        self.storage.put_block(&block)?;
+
+        // Inline put_block logic into the batch (header + full block)
+        let header_value =
+            borsh::to_vec(&block.header).map_err(|e| GenesisError::Serialization(e.to_string()))?;
+        let block_key = [b"block_".as_slice(), &slot_key(0)].concat();
+        let block_value =
+            borsh::to_vec(&block).map_err(|e| GenesisError::Serialization(e.to_string()))?;
+        batch.put(CF_BLOCKS, slot_key(0).to_vec(), header_value);
+        batch.put(CF_DEFAULT, block_key, block_value);
 
         // Step 8: Store slot metadata
         let slot_meta = SlotMeta {
@@ -308,20 +367,37 @@ impl<'a> GenesisBuilder<'a> {
             is_connected: true,
             completed: true,
         };
-        self.storage.put_slot_meta(&slot_meta)?;
+        let slot_meta_value =
+            borsh::to_vec(&slot_meta).map_err(|e| GenesisError::Serialization(e.to_string()))?;
+        batch.put(CF_SLOT_META, slot_key(0).to_vec(), slot_meta_value);
 
         // Step 9: Set root and hashes
-        let bank_hash = hashv(&[Hash::zero().as_bytes(), genesis_hash.as_bytes()]);
-        self.storage.set_root(0)?;
-        self.storage.put_bank_hash(0, &bank_hash)?;
-        self.storage.put_slot_hash(0, &genesis_hash)?;
+        batch.put(CF_ROOTS, slot_key(0).to_vec(), Vec::new());
+        batch.put(
+            CF_BANK_HASHES,
+            slot_key(0).to_vec(),
+            bank_hash.as_bytes().to_vec(),
+        );
+        batch.put(
+            CF_SLOT_HASHES,
+            slot_key(0).to_vec(),
+            genesis_hash.as_bytes().to_vec(),
+        );
 
-        // Step 10: Store genesis marker
-        self.storage
-            .put_cf(CF_DEFAULT, GENESIS_HASH_KEY, genesis_hash.as_bytes())?;
+        // Step 10: Store genesis marker (written LAST in the batch so it
+        // acts as the atomic commit flag — if it's absent on boot, genesis
+        // was never fully written).
+        batch.put(
+            CF_DEFAULT,
+            GENESIS_HASH_KEY.to_vec(),
+            genesis_hash.as_bytes().to_vec(),
+        );
 
         let total_supply_u64 =
             u64::try_from(total_supply).map_err(|_| GenesisError::SupplyOverflow)?;
+
+        // Commit everything atomically
+        self.storage.write(&batch)?;
 
         metrics::counter!("nusantara_genesis_initialized").increment(1);
 
