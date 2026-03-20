@@ -13,12 +13,13 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument, warn};
 
-use crate::server::{PubsubEvent, RpcState};
+use crate::server::{MAX_SUBSCRIPTIONS_PER_CONN, PubsubEvent, RpcState};
 
 /// Tracks which event types a client has subscribed to.
 #[derive(Debug, Default)]
@@ -32,6 +33,18 @@ impl Subscriptions {
     /// Returns `true` if at least one subscription is active.
     fn has_any(&self) -> bool {
         self.slot || self.block || !self.signatures.is_empty()
+    }
+
+    /// Returns the total number of active subscriptions.
+    fn count(&self) -> usize {
+        let mut n = self.signatures.len();
+        if self.slot {
+            n += 1;
+        }
+        if self.block {
+            n += 1;
+        }
+        n
     }
 
     /// Returns `true` if this event matches an active subscription.
@@ -64,13 +77,33 @@ struct ClientRequest {
 ///
 /// Once upgraded, the connection enters `handle_socket` which manages
 /// subscriptions and event delivery for the lifetime of the connection.
+///
+/// The handler acquires a permit from `RpcState::ws_semaphore` before
+/// upgrading. If all permits are taken (i.e. `MAX_WS_CONNECTIONS` are
+/// active), the request is rejected with 503 Service Unavailable.
 #[instrument(skip_all)]
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<RpcState>>,
 ) -> impl IntoResponse {
     metrics::counter!("nusantara_rpc_ws_upgrades").increment(1);
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+
+    // Try to acquire a WebSocket connection permit (non-blocking).
+    let permit = match state.ws_semaphore.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            warn!("WebSocket connection limit reached, rejecting upgrade");
+            metrics::counter!("nusantara_rpc_ws_rejected_limit").increment(1);
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "WebSocket connection limit reached",
+            )
+                .into_response();
+        }
+    };
+
+    ws.on_upgrade(move |socket| handle_socket(socket, state, permit))
+        .into_response()
 }
 
 /// Core WebSocket session loop.
@@ -85,8 +118,14 @@ pub async fn ws_handler(
 /// - If the broadcast receiver lags (buffer overflow), we log a warning and
 ///   continue -- the client simply misses those events.
 /// - The loop exits when the client disconnects or sends a Close frame.
+/// - The `_permit` is held for the duration of the connection. When the
+///   function returns, the permit is dropped, freeing a slot in the semaphore.
 #[instrument(skip_all)]
-async fn handle_socket(mut socket: WebSocket, state: Arc<RpcState>) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    state: Arc<RpcState>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+) {
     metrics::gauge!("nusantara_rpc_ws_active_connections").increment(1.0);
     debug!("WebSocket client connected");
 
@@ -189,11 +228,20 @@ async fn handle_client_message(text: &str, subs: &mut Subscriptions, socket: &mu
 
     let (ack, recognized) = match req.method.as_str() {
         "slotSubscribe" => {
-            subs.slot = true;
-            (
-                serde_json::json!({"result": "subscribed", "subscription": "slot"}),
-                true,
-            )
+            if !subs.slot && subs.count() >= MAX_SUBSCRIPTIONS_PER_CONN {
+                (
+                    serde_json::json!({"error": format!(
+                        "subscription limit reached ({MAX_SUBSCRIPTIONS_PER_CONN})"
+                    )}),
+                    false,
+                )
+            } else {
+                subs.slot = true;
+                (
+                    serde_json::json!({"result": "subscribed", "subscription": "slot"}),
+                    true,
+                )
+            }
         }
         "slotUnsubscribe" => {
             subs.slot = false;
@@ -203,11 +251,20 @@ async fn handle_client_message(text: &str, subs: &mut Subscriptions, socket: &mu
             )
         }
         "blockSubscribe" => {
-            subs.block = true;
-            (
-                serde_json::json!({"result": "subscribed", "subscription": "block"}),
-                true,
-            )
+            if !subs.block && subs.count() >= MAX_SUBSCRIPTIONS_PER_CONN {
+                (
+                    serde_json::json!({"error": format!(
+                        "subscription limit reached ({MAX_SUBSCRIPTIONS_PER_CONN})"
+                    )}),
+                    false,
+                )
+            } else {
+                subs.block = true;
+                (
+                    serde_json::json!({"result": "subscribed", "subscription": "block"}),
+                    true,
+                )
+            }
         }
         "blockUnsubscribe" => {
             subs.block = false;
@@ -221,6 +278,15 @@ async fn handle_client_message(text: &str, subs: &mut Subscriptions, socket: &mu
                 if params.signature.is_empty() {
                     (
                         serde_json::json!({"error": "missing signature parameter"}),
+                        false,
+                    )
+                } else if !subs.signatures.contains(&params.signature)
+                    && subs.count() >= MAX_SUBSCRIPTIONS_PER_CONN
+                {
+                    (
+                        serde_json::json!({"error": format!(
+                            "subscription limit reached ({MAX_SUBSCRIPTIONS_PER_CONN})"
+                        )}),
                         false,
                     )
                 } else {
@@ -369,8 +435,8 @@ mod tests {
         let json = serde_json::to_value(&event).expect("serialize");
         assert_eq!(json["type"], "BlockNotification");
         assert_eq!(json["slot"], 100);
-        assert_eq!(json["block_hash"], "deadbeef");
-        assert_eq!(json["tx_count"], 7);
+        assert_eq!(json["blockHash"], "deadbeef");
+        assert_eq!(json["txCount"], 7);
     }
 
     #[test]
@@ -447,5 +513,32 @@ mod tests {
             }
             _ => panic!("unexpected event variant"),
         }
+    }
+
+    #[test]
+    fn subscriptions_count_empty() {
+        let subs = Subscriptions::default();
+        assert_eq!(subs.count(), 0);
+    }
+
+    #[test]
+    fn subscriptions_count_slot_and_block() {
+        let subs = Subscriptions {
+            slot: true,
+            block: true,
+            ..Default::default()
+        };
+        assert_eq!(subs.count(), 2);
+    }
+
+    #[test]
+    fn subscriptions_count_with_signatures() {
+        let mut subs = Subscriptions {
+            slot: true,
+            ..Default::default()
+        };
+        subs.signatures.insert("sig1".to_string());
+        subs.signatures.insert("sig2".to_string());
+        assert_eq!(subs.count(), 3);
     }
 }

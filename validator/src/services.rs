@@ -277,6 +277,9 @@ impl ValidatorNode {
             tx_forward_sender: Some(rpc_tx_forward_sender),
             pubsub_tx: self.pubsub_tx.clone(),
             snapshot_dir: Path::new(&cli.ledger_path).join("snapshots"),
+            ws_semaphore: RpcState::new_ws_semaphore(),
+            faucet_address_cooldowns: Default::default(),
+            faucet_ip_cooldowns: Default::default(),
         });
 
         // Build optional TLS config from CLI flags

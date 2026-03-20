@@ -85,6 +85,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Web / RPC
 axum = { version = "0.8", features = ["http2", "ws"] }
+tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }

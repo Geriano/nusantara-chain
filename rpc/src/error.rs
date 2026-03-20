@@ -22,8 +22,8 @@ pub enum RpcError {
     #[error("faucet disabled")]
     FaucetDisabled,
 
-    #[error("rate limited")]
-    RateLimited,
+    #[error("rate limited: {0}")]
+    RateLimited(String),
 
     #[error("request timed out: {0}")]
     Timeout(String),
@@ -40,7 +40,7 @@ impl IntoResponse for RpcError {
             RpcError::NotFound(_) => StatusCode::NOT_FOUND,
             RpcError::BadRequest(_) => StatusCode::BAD_REQUEST,
             RpcError::FaucetDisabled => StatusCode::SERVICE_UNAVAILABLE,
-            RpcError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            RpcError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             RpcError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };

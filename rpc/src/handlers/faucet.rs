@@ -1,8 +1,9 @@
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use nusantara_core::Message;
 use nusantara_core::Transaction;
 use nusantara_crypto::Hash;
@@ -14,6 +15,28 @@ use crate::server::{PubsubEvent, RpcState};
 use crate::types::{
     AirdropAndConfirmRequest, AirdropAndConfirmResponse, AirdropRequest, AirdropResponse,
 };
+
+/// Custom extractor that retrieves the client IP from `ConnectInfo` if
+/// available, falling back to localhost. This is a `FromRequestParts`
+/// extractor that never rejects, making it safe to use regardless of
+/// whether `into_make_service_with_connect_info` was used.
+pub struct ClientIp(pub IpAddr);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let ip = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip())
+            .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        Ok(ClientIp(ip))
+    }
+}
 
 /// Maximum allowed timeout for airdrop-and-confirm requests (30 seconds).
 const MAX_CONFIRM_TIMEOUT_MS: u64 = 30_000;
@@ -89,16 +112,25 @@ fn build_and_submit_airdrop(
     responses(
         (status = 200, description = "Airdrop submitted", body = AirdropResponse),
         (status = 400, description = "Invalid request"),
+        (status = 429, description = "Rate limited"),
         (status = 503, description = "Faucet disabled")
     )
 )]
 pub async fn airdrop(
     State(state): State<Arc<RpcState>>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<AirdropRequest>,
 ) -> Result<Json<AirdropResponse>, RpcError> {
     metrics::counter!("nusantara_rpc_requests", "endpoint" => "airdrop").increment(1);
 
+    // Check faucet cooldowns before building the transaction.
+    state.check_faucet_ip_cooldown(ip)?;
+    state.check_faucet_address_cooldown(&req.address)?;
+
     let signature = build_and_submit_airdrop(&state, &req.address, req.lamports)?;
+
+    // Record successful airdrop for cooldown tracking.
+    state.record_faucet_airdrop(&req.address, ip);
 
     Ok(Json(AirdropResponse { signature }))
 }
@@ -110,15 +142,21 @@ pub async fn airdrop(
     responses(
         (status = 200, description = "Airdrop confirmed", body = AirdropAndConfirmResponse),
         (status = 400, description = "Invalid request"),
+        (status = 429, description = "Rate limited"),
         (status = 503, description = "Faucet disabled"),
         (status = 504, description = "Confirmation timed out")
     )
 )]
 pub async fn airdrop_and_confirm(
     State(state): State<Arc<RpcState>>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<AirdropAndConfirmRequest>,
 ) -> Result<Json<AirdropAndConfirmResponse>, RpcError> {
     metrics::counter!("nusantara_rpc_requests", "endpoint" => "airdrop_and_confirm").increment(1);
+
+    // Check faucet cooldowns before building the transaction.
+    state.check_faucet_ip_cooldown(ip)?;
+    state.check_faucet_address_cooldown(&req.address)?;
 
     let timeout_ms = req.timeout_ms.min(MAX_CONFIRM_TIMEOUT_MS);
     let timeout = std::time::Duration::from_millis(timeout_ms);
@@ -128,6 +166,9 @@ pub async fn airdrop_and_confirm(
     let mut event_rx: broadcast::Receiver<PubsubEvent> = state.pubsub_tx.subscribe();
 
     let signature = build_and_submit_airdrop(&state, &req.address, req.lamports)?;
+
+    // Record successful airdrop for cooldown tracking.
+    state.record_faucet_airdrop(&req.address, ip);
 
     // Await the matching SignatureNotification from the broadcast channel.
     let deadline = tokio::time::Instant::now() + timeout;
@@ -173,5 +214,63 @@ pub async fn airdrop_and_confirm(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+    use std::time::Instant;
+
+    use crate::server::{FAUCET_COOLDOWN_PER_ADDRESS_SECS, FAUCET_COOLDOWN_PER_IP_SECS};
+    use dashmap::DashMap;
+
+    #[test]
+    fn faucet_address_cooldown_enforced() {
+        let cooldowns: DashMap<String, Instant> = DashMap::new();
+        let address = "test_address".to_string();
+
+        // No entry yet -- should pass
+        assert!(!cooldowns.contains_key(&address));
+
+        // Record an airdrop
+        cooldowns.insert(address.clone(), Instant::now());
+
+        // Immediately after -- should be within cooldown
+        let entry = cooldowns.get(&address).unwrap();
+        let elapsed = entry.elapsed().as_secs();
+        assert!(elapsed < FAUCET_COOLDOWN_PER_ADDRESS_SECS);
+    }
+
+    #[test]
+    fn faucet_ip_cooldown_enforced() {
+        let cooldowns: DashMap<IpAddr, Instant> = DashMap::new();
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+        // No entry yet -- should pass
+        assert!(!cooldowns.contains_key(&ip));
+
+        // Record an airdrop
+        cooldowns.insert(ip, Instant::now());
+
+        // Immediately after -- should be within cooldown
+        let entry = cooldowns.get(&ip).unwrap();
+        let elapsed = entry.elapsed().as_secs();
+        assert!(elapsed < FAUCET_COOLDOWN_PER_IP_SECS);
+    }
+
+    #[test]
+    fn cooldown_constants_are_reasonable() {
+        assert_eq!(FAUCET_COOLDOWN_PER_ADDRESS_SECS, 60);
+        assert_eq!(FAUCET_COOLDOWN_PER_IP_SECS, 10);
+    }
+
+    #[test]
+    fn client_ip_extractor_fallback() {
+        // When no ConnectInfo is present, ClientIp should default to localhost
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let client_ip = ClientIp(ip);
+        assert_eq!(client_ip.0, IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
 }

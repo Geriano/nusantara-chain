@@ -1,10 +1,12 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Instant;
 
 use axum::Router;
+use dashmap::DashMap;
 use nusantara_consensus::bank::ConsensusBank;
 use nusantara_consensus::leader_schedule::{LeaderSchedule, LeaderScheduleGenerator};
 use nusantara_core::epoch::EpochSchedule;
@@ -14,7 +16,7 @@ use nusantara_gossip::cluster_info::ClusterInfo;
 use nusantara_mempool::Mempool;
 use nusantara_storage::Storage;
 use serde::Serialize;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -22,11 +24,24 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers;
+use crate::rate_limiter::{RpcRateLimitLayer, RpcRateLimiter};
 use crate::types;
 
 /// Default broadcast channel capacity for pubsub events.
 /// Sized to absorb short bursts without dropping events for connected clients.
 const PUBSUB_CHANNEL_CAPACITY: usize = 4096;
+
+/// Maximum concurrent WebSocket connections.
+pub const MAX_WS_CONNECTIONS: usize = 1000;
+
+/// Maximum subscriptions per WebSocket connection (slot + block + N signatures).
+pub const MAX_SUBSCRIPTIONS_PER_CONN: usize = 100;
+
+/// Faucet cooldown per recipient address (seconds).
+pub const FAUCET_COOLDOWN_PER_ADDRESS_SECS: u64 = 60;
+
+/// Faucet cooldown per source IP (seconds).
+pub const FAUCET_COOLDOWN_PER_IP_SECS: u64 = 10;
 
 pub type SharedLeaderCache = Arc<parking_lot::RwLock<HashMap<u64, LeaderSchedule>>>;
 
@@ -74,6 +89,14 @@ pub struct RpcState {
     pub pubsub_tx: broadcast::Sender<PubsubEvent>,
     /// Directory where snapshot files are stored (e.g. `{ledger}/snapshots/`).
     pub snapshot_dir: PathBuf,
+    /// Semaphore that bounds the number of concurrent WebSocket connections.
+    pub ws_semaphore: Arc<Semaphore>,
+    /// Per-address cooldown tracker for faucet requests.
+    /// Key: recipient address (base64 string), Value: last airdrop timestamp.
+    pub faucet_address_cooldowns: DashMap<String, Instant>,
+    /// Per-IP cooldown tracker for faucet requests.
+    /// Key: source IP, Value: last airdrop timestamp.
+    pub faucet_ip_cooldowns: DashMap<IpAddr, Instant>,
 }
 
 impl RpcState {
@@ -83,6 +106,50 @@ impl RpcState {
     pub fn new_pubsub_channel() -> broadcast::Sender<PubsubEvent> {
         let (tx, _rx) = broadcast::channel(PUBSUB_CHANNEL_CAPACITY);
         tx
+    }
+
+    /// Create a new WebSocket connection semaphore with the default limit.
+    pub fn new_ws_semaphore() -> Arc<Semaphore> {
+        Arc::new(Semaphore::new(MAX_WS_CONNECTIONS))
+    }
+
+    /// Check the faucet per-address cooldown. Returns `Ok(())` if the address
+    /// has not been airdropped within the cooldown window, or an `RpcError` if
+    /// it has.
+    pub fn check_faucet_address_cooldown(&self, address: &str) -> Result<(), crate::RpcError> {
+        if let Some(last) = self.faucet_address_cooldowns.get(address) {
+            let elapsed = last.elapsed().as_secs();
+            if elapsed < FAUCET_COOLDOWN_PER_ADDRESS_SECS {
+                let remaining = FAUCET_COOLDOWN_PER_ADDRESS_SECS - elapsed;
+                return Err(crate::RpcError::RateLimited(format!(
+                    "address cooldown: retry in {remaining}s"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check the faucet per-IP cooldown. Returns `Ok(())` if the IP has not
+    /// made a faucet request within the cooldown window.
+    pub fn check_faucet_ip_cooldown(&self, ip: IpAddr) -> Result<(), crate::RpcError> {
+        if let Some(last) = self.faucet_ip_cooldowns.get(&ip) {
+            let elapsed = last.elapsed().as_secs();
+            if elapsed < FAUCET_COOLDOWN_PER_IP_SECS {
+                let remaining = FAUCET_COOLDOWN_PER_IP_SECS - elapsed;
+                return Err(crate::RpcError::RateLimited(format!(
+                    "IP cooldown: retry in {remaining}s"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Record a successful faucet airdrop for both address and IP cooldowns.
+    pub fn record_faucet_airdrop(&self, address: &str, ip: IpAddr) {
+        let now = Instant::now();
+        self.faucet_address_cooldowns
+            .insert(address.to_string(), now);
+        self.faucet_ip_cooldowns.insert(ip, now);
     }
 }
 
@@ -212,6 +279,8 @@ pub struct RpcServer;
 
 impl RpcServer {
     pub fn router(state: Arc<RpcState>) -> Router {
+        let rate_limiter = RpcRateLimiter::new();
+
         let api_routes = Router::new()
             .route("/v1/health", axum::routing::get(handlers::health::health))
             .route("/v1/slot", axum::routing::get(handlers::slot::get_slot))
@@ -312,6 +381,7 @@ impl RpcServer {
         Router::new()
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
             .merge(api_routes)
+            .layer(RpcRateLimitLayer::new(rate_limiter))
             .layer(CorsLayer::permissive())
             .layer(TraceLayer::new_for_http())
             .with_state(state)
@@ -331,6 +401,10 @@ impl RpcServer {
     }
 
     /// Serve plain HTTP (no TLS).
+    ///
+    /// Uses `into_make_service_with_connect_info` so that `ConnectInfo<SocketAddr>`
+    /// is available to the rate-limiting middleware and handlers that need the
+    /// client's IP address.
     async fn serve_plain(
         addr: SocketAddr,
         state: Arc<RpcState>,
@@ -349,13 +423,16 @@ impl RpcServer {
         info!(addr = %addr, "RPC server listening (HTTP)");
         metrics::counter!("nusantara_rpc_server_started").increment(1);
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = shutdown.wait_for(|v| *v).await;
-                info!("RPC server shutting down");
-            })
-            .await
-            .unwrap_or_else(|e| tracing::error!(error = %e, "RPC server error"));
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = shutdown.wait_for(|v| *v).await;
+            info!("RPC server shutting down");
+        })
+        .await
+        .unwrap_or_else(|e| tracing::error!(error = %e, "RPC server error"));
     }
 
     /// Serve HTTPS with TLS termination.
@@ -363,12 +440,17 @@ impl RpcServer {
     /// Accepts TLS connections using `tokio_rustls::TlsAcceptor`, then
     /// hands the decrypted stream to axum via `hyper`. Each accepted
     /// connection is spawned as an independent task for concurrency.
+    ///
+    /// Note: `ConnectInfo` is injected manually as a request extension from
+    /// the `remote_addr` captured at accept time so the rate limiter still
+    /// has access to the client IP.
     async fn serve_tls(
         addr: SocketAddr,
         state: Arc<RpcState>,
         tls_config: RpcTlsConfig,
         mut shutdown: watch::Receiver<bool>,
     ) {
+        use axum::extract::ConnectInfo;
         use hyper_util::rt::TokioIo;
 
         let app = Self::router(state);
@@ -403,7 +485,11 @@ impl RpcServer {
                     };
 
                     let acceptor = acceptor.clone();
-                    let app = app.clone();
+                    let mut app = app.clone();
+
+                    // Inject ConnectInfo so the rate limiter can access the client IP
+                    // even though we are not using axum::serve (which normally does this).
+                    app = app.layer(axum::Extension(ConnectInfo(remote_addr)));
 
                     tokio::spawn(async move {
                         let tls_stream = match acceptor.accept(tcp_stream).await {
