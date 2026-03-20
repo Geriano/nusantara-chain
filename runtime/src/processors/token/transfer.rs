@@ -18,7 +18,10 @@ pub(super) fn process_transfer(
     let auth_idx = accounts[2] as usize;
 
     if src_idx == dest_idx {
-        return Err(RuntimeError::AccountIndexAliasing { idx_a: src_idx, idx_b: dest_idx });
+        return Err(RuntimeError::AccountIndexAliasing {
+            idx_a: src_idx,
+            idx_b: dest_idx,
+        });
     }
 
     let auth = ctx.get_account(auth_idx)?;

@@ -93,8 +93,7 @@ impl SysvarCache {
         stake_history: StakeHistory,
         recent_blockhashes: RecentBlockhashes,
     ) -> Self {
-        let recent_blockhash_set: HashSet<Hash> =
-            recent_blockhashes.0.iter().copied().collect();
+        let recent_blockhash_set: HashSet<Hash> = recent_blockhashes.0.iter().copied().collect();
         Self {
             clock,
             rent,

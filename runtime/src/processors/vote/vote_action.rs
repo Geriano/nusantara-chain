@@ -46,7 +46,10 @@ pub(super) fn process_vote_action(
         }
 
         // Pop votes that have reached max lockout
-        let excess = state.votes.len().saturating_sub(MAX_LOCKOUT_HISTORY as usize);
+        let excess = state
+            .votes
+            .len()
+            .saturating_sub(MAX_LOCKOUT_HISTORY as usize);
         if excess > 0
             && let Some(oldest) = state.votes.drain(..excess).next_back()
         {

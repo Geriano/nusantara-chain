@@ -21,7 +21,7 @@ pub fn process_loader(
     data: &[u8],
     ctx: &mut TransactionContext,
     sysvars: &SysvarCache,
-    program_cache: &ProgramCache,
+    _program_cache: &ProgramCache,
 ) -> Result<(), RuntimeError> {
     let instruction = LoaderInstruction::try_from_slice(data)
         .map_err(|e| RuntimeError::InvalidInstructionData(e.to_string()))?;
@@ -37,20 +37,17 @@ pub fn process_loader(
         }
         LoaderInstruction::Deploy { max_data_len } => {
             ctx.consume_compute(LOADER_DEPLOY_COST)?;
-            let program_id = get_program_address(accounts, 1, ctx)?;
             deploy::process_deploy(accounts, max_data_len, ctx, sysvars)?;
-            // Invalidate cached compiled module so the next invocation
-            // recompiles from the freshly deployed bytecode.
-            program_cache.invalidate(&program_id);
+            // No cache invalidation needed: the program cache is keyed by
+            // bytecode hash, so new bytecode naturally produces a new cache key.
+            // The old entry ages out via LRU eviction.
             Ok(())
         }
         LoaderInstruction::Upgrade => {
             ctx.consume_compute(LOADER_UPGRADE_COST)?;
-            let program_id = get_program_address(accounts, 0, ctx)?;
             upgrade::process_upgrade(accounts, ctx)?;
-            // Invalidate the cached module so the upgraded bytecode takes
-            // effect immediately.
-            program_cache.invalidate(&program_id);
+            // No cache invalidation needed: the program cache is keyed by
+            // bytecode hash, so upgraded bytecode naturally uses a new cache key.
             Ok(())
         }
         LoaderInstruction::SetAuthority { new_authority } => {
@@ -64,30 +61,11 @@ pub fn process_loader(
     }
 }
 
-/// Read the address of the account at the given position in the accounts
-/// slice. Used to obtain the program_id for cache invalidation before
-/// the processor potentially moves data around.
-fn get_program_address(
-    accounts: &[u8],
-    position: usize,
-    ctx: &TransactionContext,
-) -> Result<nusantara_crypto::Hash, RuntimeError> {
-    if position >= accounts.len() {
-        return Err(RuntimeError::InvalidInstructionData(format!(
-            "account index {position} out of bounds for accounts list of length {}",
-            accounts.len()
-        )));
-    }
-    let idx = accounts[position] as usize;
-    let acc = ctx.get_account(idx)?;
-    Ok(*acc.address)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nusantara_core::{Account, Message};
     use nusantara_core::program::LOADER_PROGRAM_ID;
+    use nusantara_core::{Account, Message};
     use nusantara_crypto::hash;
     use nusantara_loader_program::state::LoaderState;
 
