@@ -175,6 +175,27 @@ impl SlotCommitter {
         Ok(())
     }
 
+    /// Extract the accumulated write batch WITHOUT flushing to storage.
+    ///
+    /// Used by `execute_slot_parallel_deferred` so the caller can verify
+    /// execution results before committing to storage.
+    pub fn take_write_batch(self) -> (StorageWriteBatch, SlotCommitter) {
+        let batch = self.write_batch;
+        let rest = SlotCommitter {
+            transactions_executed: self.transactions_executed,
+            transactions_succeeded: self.transactions_succeeded,
+            transactions_failed: self.transactions_failed,
+            total_fees: self.total_fees,
+            total_compute_consumed: self.total_compute_consumed,
+            delta_hasher: self.delta_hasher,
+            merged_deltas: self.merged_deltas,
+            write_batch: StorageWriteBatch::new(),
+            tx_statuses: self.tx_statuses,
+            account_cache: self.account_cache,
+        };
+        (batch, rest)
+    }
+
     /// Finalize the slot: compute delta hash, sort deltas, and return the result.
     pub fn finalize(self, slot: u64) -> SlotExecutionResult {
         let account_delta_hash = self.delta_hasher.finalize();

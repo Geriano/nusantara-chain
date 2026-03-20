@@ -7,6 +7,9 @@ use nusantara_core::block::Block;
 use nusantara_core::DEFAULT_SLOT_DURATION_MS;
 use nusantara_crypto::Hash;
 use nusantara_rpc::PubsubEvent;
+use nusantara_storage::StorageWriteBatch;
+use nusantara_storage::cf::{CF_BANK_HASHES, CF_BLOCKS, CF_DEFAULT, CF_SLOT_HASHES, CF_SLOT_META};
+use nusantara_storage::keys::slot_key;
 use nusantara_sysvar_program::SlotHashes;
 use nusantara_turbine::turbine_tree::TURBINE_FANOUT;
 use nusantara_turbine::{BroadcastStage, TurbineTree};
@@ -252,23 +255,65 @@ impl ValidatorNode {
         // Mark our own block as stored
         self.shred_collector.mark_slot_stored(self.current_slot);
 
-        // 5. Async block storage — put_block, put_slot_meta, flush_to_storage
-        //    offloaded to a background thread so they don't block the slot loop.
-        {
+        // 5. Atomic block storage — put_block + put_slot_meta + bank/slot hashes
+        //    all combined into a single StorageWriteBatch, offloaded to a
+        //    blocking thread so RocksDB I/O doesn't stall the async slot loop.
+        //    The result is awaited so write failures are detected and broadcast
+        //    is skipped on error (preventing silent data loss).
+        let storage_write_ok = {
             let storage = self.storage.clone();
-            let bank = Arc::clone(&self.bank);
             let block_for_storage = block.clone();
-            tokio::task::spawn_blocking(move || {
-                if let Err(e) = storage.put_block(&block_for_storage) {
-                    tracing::warn!(error = %e, "async put_block failed");
-                }
-                if let Err(e) = storage.put_slot_meta(&pending_storage.slot_meta) {
-                    tracing::warn!(error = %e, "async put_slot_meta failed");
-                }
-                if let Err(e) = bank.flush_to_storage(&pending_storage.frozen) {
-                    tracing::warn!(error = %e, "async flush_to_storage failed");
-                }
-            });
+            let slot = self.current_slot;
+            let frozen = pending_storage.frozen.clone();
+            let sm = pending_storage.slot_meta.clone();
+            tokio::task::spawn_blocking(move || -> Result<(), nusantara_storage::StorageError> {
+                let mut batch = StorageWriteBatch::new();
+
+                // put_block: header in CF_BLOCKS + full block in CF_DEFAULT
+                let header_value = borsh::to_vec(&block_for_storage.header)
+                    .map_err(|e| nusantara_storage::StorageError::Serialization(e.to_string()))?;
+                let block_key = [b"block_".as_slice(), &slot_key(slot)].concat();
+                let block_value = borsh::to_vec(&block_for_storage)
+                    .map_err(|e| nusantara_storage::StorageError::Serialization(e.to_string()))?;
+                batch.put(CF_BLOCKS, slot_key(slot).to_vec(), header_value);
+                batch.put(CF_DEFAULT, block_key, block_value);
+
+                // put_slot_meta
+                let sm_value = borsh::to_vec(&sm)
+                    .map_err(|e| nusantara_storage::StorageError::Serialization(e.to_string()))?;
+                batch.put(CF_SLOT_META, slot_key(slot).to_vec(), sm_value);
+
+                // flush_to_storage: bank_hash + slot_hash
+                batch.put(
+                    CF_BANK_HASHES,
+                    slot_key(frozen.slot).to_vec(),
+                    frozen.bank_hash.as_bytes().to_vec(),
+                );
+                batch.put(
+                    CF_SLOT_HASHES,
+                    slot_key(frozen.slot).to_vec(),
+                    frozen.block_hash.as_bytes().to_vec(),
+                );
+
+                storage.write(&batch)
+            })
+            .await
+        };
+
+        match storage_write_ok {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, slot = self.current_slot, "atomic block storage write failed — skipping broadcast");
+                // Storage write failed: the block is NOT persisted.
+                // Skip broadcast to avoid propagating a block we can't serve.
+                metrics::counter!("nusantara_block_storage_errors").increment(1);
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::error!(error = %e, slot = self.current_slot, "block storage task panicked — skipping broadcast");
+                metrics::counter!("nusantara_block_storage_errors").increment(1);
+                return Ok(());
+            }
         }
 
         // 6. Feed into ReplayStage for fork tree tracking

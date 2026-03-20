@@ -7,7 +7,7 @@ use nusantara_core::block::Block;
 use nusantara_core::{EpochSchedule, FeeCalculator};
 use nusantara_crypto::{Hash, hashv};
 use nusantara_rent_program::Rent;
-use nusantara_runtime::{ProgramCache, execute_slot_parallel};
+use nusantara_runtime::{ProgramCache, execute_slot_parallel_deferred};
 use nusantara_storage::Storage;
 use nusantara_sysvar_program::SlotHashes;
 use tracing::instrument;
@@ -106,8 +106,12 @@ pub fn replay_block_full(
         tracing::info!(parent_slot, rewound, "rewound account index (fork-aware) before replay");
     }
 
-    // 7. Execute slot via runtime (parallel, same as produce_block path)
-    let exec_result = execute_slot_parallel(
+    // 7. Execute slot via runtime (parallel, same as produce_block path).
+    //    Uses the DEFERRED variant which does NOT write to storage, returning
+    //    the accumulated write batch instead. This allows verification to
+    //    happen BEFORE any storage mutation, eliminating the need for cleanup
+    //    on verification failure.
+    let deferred = execute_slot_parallel_deferred(
         slot,
         &block.transactions,
         storage,
@@ -116,20 +120,10 @@ pub fn replay_block_full(
         program_cache,
     )?;
 
-    // 8. Update state tree with account deltas (matches produce_block path)
-    bank.update_state_tree(&exec_result.account_deltas);
+    let exec_result = &deferred.result;
 
-    // Collect addresses modified by execution (for cleanup on failure).
-    // execute_slot_parallel already wrote these to CF_ACCOUNTS during execution.
-    // If verification fails, we must delete them to avoid contaminating future
-    // replays — otherwise the second attempt loads the wrong account state.
-    let modified_addresses: Vec<Hash> = exec_result
-        .account_deltas
-        .iter()
-        .map(|(addr, _)| *addr)
-        .collect();
-
-    // 9. Verify bank_hash (parent_bank_hash was obtained in step 1)
+    // 8. Verify bank_hash BEFORE committing anything to storage.
+    //    (parent_bank_hash was obtained in step 1)
     let expected_bank_hash = ConsensusBank::compute_bank_hash(
         &parent_bank_hash,
         &exec_result.account_delta_hash,
@@ -145,67 +139,38 @@ pub fn replay_block_full(
             account_delta_hash = %exec_result.account_delta_hash.to_base64(),
             "bank_hash mismatch diagnostic"
         );
-        cleanup_failed_replay(storage, slot, &modified_addresses, &ancestor_set);
         return Err(ValidatorError::BankHashMismatch { slot });
     }
 
-    // 10. Verify merkle_root
+    // 9. Verify merkle_root
     let expected_merkle = helpers::compute_merkle_root(&block.transactions);
     if expected_merkle != block.header.merkle_root {
-        cleanup_failed_replay(storage, slot, &modified_addresses, &ancestor_set);
         return Err(ValidatorError::MerkleRootMismatch { slot });
     }
 
-    // 11. Verify block_hash = hashv(parent_hash, slot_le_bytes, poh_hash)
+    // 10. Verify block_hash = hashv(parent_hash, slot_le_bytes, poh_hash)
     let expected_block_hash = hashv(&[
         block.header.parent_hash.as_bytes(),
         &slot.to_le_bytes(),
         block.header.poh_hash.as_bytes(),
     ]);
     if expected_block_hash != block.header.block_hash {
-        cleanup_failed_replay(storage, slot, &modified_addresses, &ancestor_set);
         return Err(ValidatorError::BlockHashMismatch { slot });
     }
 
-    // 12. Record slot hash in bank
+    // 11. All verification passed — NOW commit the write batch to storage.
+    //     This is the only point where storage is mutated, and it happens
+    //     atomically via a single RocksDB WriteBatch.
+    storage.write(&deferred.write_batch)?;
+
+    // 12. Update state tree with account deltas (matches produce_block path)
+    bank.update_state_tree(&deferred.result.account_deltas);
+
+    // 13. Record slot hash in bank
     bank.record_slot_hash(slot, block.header.block_hash);
 
-    // 13. Feed through ReplayStage for fork tree / Tower / commitment processing
+    // 14. Feed through ReplayStage for fork tree / Tower / commitment processing
     let result = replay_stage.replay_block(block, &[])?;
 
     Ok(result)
-}
-
-/// Clean up storage pollution from a failed `replay_block_full`.
-///
-/// `execute_slot_parallel` writes account deltas to `CF_ACCOUNTS` and updates
-/// `CF_ACCOUNT_INDEX` DURING execution (before verification). If verification
-/// fails, these writes must be undone — otherwise the contaminated data is
-/// loaded on the next replay attempt, producing a different
-/// `account_delta_hash` and causing cascading mismatches.
-///
-/// Uses fork-aware cleanup: the account index is restored to the latest
-/// version from the parent's ancestry set, not just any version ≤ parent_slot.
-fn cleanup_failed_replay(
-    storage: &Arc<Storage>,
-    slot: u64,
-    modified_addresses: &[Hash],
-    ancestor_set: &HashSet<u64>,
-) {
-    match storage.cleanup_failed_slot_for_ancestry(slot, modified_addresses, ancestor_set) {
-        Ok(count) => {
-            tracing::debug!(
-                slot,
-                cleaned = count,
-                "cleaned up failed replay storage entries (fork-aware)"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                slot,
-                "failed to clean up storage after replay failure"
-            );
-        }
-    }
 }

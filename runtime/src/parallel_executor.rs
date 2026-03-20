@@ -23,7 +23,7 @@
 //! `parking_lot::Mutex` with very short critical sections (no `.await`).
 
 use nusantara_core::{FeeCalculator, Transaction};
-use nusantara_storage::Storage;
+use nusantara_storage::{Storage, StorageWriteBatch};
 use nusantara_vm::ProgramCache;
 use rayon::prelude::*;
 use tracing::instrument;
@@ -126,6 +126,92 @@ pub fn execute_slot_parallel(
     metrics::counter!("nusantara_runtime_parallel_batches_total").increment(batches.len() as u64);
 
     Ok(result)
+}
+
+/// Result of deferred slot execution: the execution result + the uncommitted
+/// write batch. The caller must commit the batch to storage after verification.
+pub struct DeferredSlotExecution {
+    pub result: SlotExecutionResult,
+    pub write_batch: StorageWriteBatch,
+}
+
+/// Execute a slot's transactions in parallel batches WITHOUT writing to storage.
+///
+/// Identical to [`execute_slot_parallel`] but the account deltas, transaction
+/// statuses, and address signatures are accumulated in a `StorageWriteBatch`
+/// that is returned to the caller instead of being flushed. This allows the
+/// caller to verify the execution results (e.g., bank_hash) BEFORE committing
+/// the writes, preventing storage pollution on verification failure.
+///
+/// # Usage
+///
+/// ```ignore
+/// let deferred = execute_slot_parallel_deferred(slot, txs, storage, ...)?;
+/// // verify bank_hash, merkle_root, etc.
+/// if verification_ok {
+///     storage.write(&deferred.write_batch)?;
+/// }
+/// ```
+#[instrument(skip_all, fields(slot = slot, tx_count = transactions.len()))]
+pub fn execute_slot_parallel_deferred(
+    slot: u64,
+    transactions: &[Transaction],
+    storage: &Storage,
+    sysvars: &SysvarCache,
+    fee_calculator: &FeeCalculator,
+    program_cache: &ProgramCache,
+) -> Result<DeferredSlotExecution, RuntimeError> {
+    let mut committer = SlotCommitter::new();
+
+    let batches = TransactionScheduler::schedule(transactions);
+
+    for batch in &batches {
+        let results: Vec<(usize, TransactionResult)> = {
+            let cache = committer.account_cache();
+            batch
+                .tx_indices
+                .par_iter()
+                .map(|&tx_idx| {
+                    let tx = &transactions[tx_idx];
+                    let result = execute_transaction(
+                        tx,
+                        storage,
+                        sysvars,
+                        fee_calculator,
+                        slot,
+                        program_cache,
+                        Some(cache),
+                    );
+                    (tx_idx, result)
+                })
+                .collect()
+        };
+
+        let mut sorted_results = results;
+        sorted_results.sort_by_key(|(idx, _)| *idx);
+
+        for (tx_idx, result) in sorted_results {
+            committer.commit_result(tx_idx, result, slot)?;
+        }
+
+        committer.flush_batch(storage)?;
+    }
+
+    // Extract the write batch WITHOUT flushing to storage
+    let (write_batch, committer) = committer.take_write_batch();
+    let result = committer.finalize(slot);
+
+    metrics::counter!("nusantara_runtime_parallel_slot_transactions_total")
+        .increment(result.transactions_executed);
+    metrics::counter!("nusantara_runtime_parallel_slot_fees_collected_total").increment(result.total_fees);
+    metrics::counter!("nusantara_runtime_parallel_slot_compute_consumed")
+        .increment(result.total_compute_consumed);
+    metrics::counter!("nusantara_runtime_parallel_batches_total").increment(batches.len() as u64);
+
+    Ok(DeferredSlotExecution {
+        result,
+        write_batch,
+    })
 }
 
 #[cfg(test)]
