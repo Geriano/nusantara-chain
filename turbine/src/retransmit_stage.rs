@@ -91,8 +91,20 @@ impl RetransmitStage {
 
                             metrics::counter!("nusantara_turbine_batch_headers_verified").increment(1);
 
-                            // Store header in collector
-                            self.collector.insert_header(header.clone());
+                            // Store header in collector. If shreds arrived before
+                            // the header, retroactive Merkle verification runs and
+                            // block assembly may complete here.
+                            if let Some(block) = self.collector.insert_header(header.clone()) {
+                                info!(
+                                    slot = block.header.slot,
+                                    txs = block.header.transaction_count,
+                                    "block assembled from buffered shreds after header arrival"
+                                );
+                                if block_sender.send(block).await.is_err() {
+                                    debug!("block channel closed");
+                                    break;
+                                }
+                            }
 
                             // Retransmit header to downstream peers
                             if let Some(tree) = tree_provider(slot) {
