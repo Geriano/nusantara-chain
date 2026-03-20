@@ -75,7 +75,10 @@ impl PohRecorder {
     /// Emit a tick after HASHES_PER_TICK iterations.
     #[instrument(skip(self), level = "debug")]
     pub fn tick(&mut self) -> Tick {
-        self.hash_iterations(self.hashes_per_tick.saturating_sub(self.num_hashes % self.hashes_per_tick));
+        self.hash_iterations(
+            self.hashes_per_tick
+                .saturating_sub(self.num_hashes % self.hashes_per_tick),
+        );
         let entry = PohEntry {
             num_hashes: self.num_hashes,
             hash: self.hash,
@@ -262,10 +265,7 @@ mod tests {
         let ticks = recorder.produce_slot();
         assert_eq!(ticks.len(), TICKS_PER_SLOT as usize);
         // After produce_slot: 1 (from first tick) + TICKS_PER_SLOT * 1 hashes
-        assert_eq!(
-            ticks.last().unwrap().entry.num_hashes,
-            1 + TICKS_PER_SLOT
-        );
+        assert_eq!(ticks.last().unwrap().entry.num_hashes, 1 + TICKS_PER_SLOT);
     }
 
     #[test]

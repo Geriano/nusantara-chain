@@ -132,9 +132,15 @@ fn test_consensus_pipeline_with_forks() {
     assert_eq!(stage.fork_tree().node_count(), 6);
 
     // Continue building main chain from slot 3
-    stage.replay_block(&make_block(6, 3, validator), &[]).unwrap();
-    stage.replay_block(&make_block(7, 6, validator), &[]).unwrap();
-    stage.replay_block(&make_block(8, 7, validator), &[]).unwrap();
+    stage
+        .replay_block(&make_block(6, 3, validator), &[])
+        .unwrap();
+    stage
+        .replay_block(&make_block(7, 6, validator), &[])
+        .unwrap();
+    stage
+        .replay_block(&make_block(8, 7, validator), &[])
+        .unwrap();
 
     assert!(stage.fork_tree().contains(8));
 }

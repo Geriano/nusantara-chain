@@ -4,8 +4,7 @@ use nusantara_core::native_token::const_parse_u64;
 use nusantara_core::program::VOTE_PROGRAM_ID;
 use nusantara_crypto::Hash;
 
-pub const MAX_LOCKOUT_HISTORY: u64 =
-    const_parse_u64(env!("NUSA_VOTE_MAX_LOCKOUT_HISTORY"));
+pub const MAX_LOCKOUT_HISTORY: u64 = const_parse_u64(env!("NUSA_VOTE_MAX_LOCKOUT_HISTORY"));
 pub const MAX_EPOCH_CREDITS_HISTORY: u64 =
     const_parse_u64(env!("NUSA_VOTE_MAX_EPOCH_CREDITS_HISTORY"));
 
@@ -48,7 +47,7 @@ impl Lockout {
     }
 
     pub fn is_locked_out_at_slot(&self, slot: u64) -> bool {
-        self.slot + self.lockout() >= slot
+        self.slot.saturating_add(self.lockout()) >= slot
     }
 }
 
@@ -256,6 +255,29 @@ mod tests {
             confirmation_count: 31,
         };
         assert_eq!(lockout_31.lockout(), 1u64 << 31);
+    }
+
+    #[test]
+    fn lockout_no_overflow_near_u64_max() {
+        // Slot near u64::MAX with large lockout should not overflow
+        let lockout = Lockout {
+            slot: u64::MAX - 10,
+            confirmation_count: 32,
+        };
+        // lockout() = 2^32 = 4_294_967_296, slot + lockout would overflow without saturating_add
+        // saturating_add clamps to u64::MAX, so is_locked_out_at_slot should return true
+        // for any slot <= u64::MAX
+        assert!(lockout.is_locked_out_at_slot(u64::MAX));
+        assert!(lockout.is_locked_out_at_slot(u64::MAX - 5));
+        assert!(lockout.is_locked_out_at_slot(0));
+
+        // Even with max slot and high confirmation, no panic
+        let lockout_max_slot = Lockout {
+            slot: u64::MAX,
+            confirmation_count: 63,
+        };
+        assert!(lockout_max_slot.is_locked_out_at_slot(u64::MAX));
+        assert!(lockout_max_slot.is_locked_out_at_slot(0));
     }
 
     #[test]

@@ -15,8 +15,9 @@ impl ConsensusBank {
 
     /// Get validator effective stake.
     pub fn get_validator_stake(&self, validator: &Hash) -> u64 {
-        self.epoch_stakes
+        self.epoch_stake_state
             .read()
+            .epoch_stakes
             .get(validator)
             .copied()
             .unwrap_or(0)
@@ -45,22 +46,17 @@ impl ConsensusBank {
     /// Get the stake distribution: (validator_identity, effective_stake).
     /// Uses the cached vec when available; falls back to building from epoch_stakes.
     pub fn get_stake_distribution(&self) -> Vec<(Hash, u64)> {
-        let cached = self.cached_stake_vec.read();
-        if !cached.is_empty() {
-            return (**cached).clone();
+        let state = self.epoch_stake_state.read();
+        if !state.cached_stake_vec.is_empty() {
+            return (*state.cached_stake_vec).clone();
         }
-        drop(cached);
-        self.epoch_stakes
-            .read()
-            .iter()
-            .map(|(&k, &v)| (k, v))
-            .collect()
+        state.epoch_stakes.iter().map(|(&k, &v)| (k, v)).collect()
     }
 
     /// Get the cached stake distribution as an `Arc` — zero-copy for callers
     /// that only need a read reference.
     pub fn get_stake_distribution_cached(&self) -> Arc<Vec<(Hash, u64)>> {
-        Arc::clone(&self.cached_stake_vec.read())
+        Arc::clone(&self.epoch_stake_state.read().cached_stake_vec)
     }
 
     /// Recalculate effective stakes for a new epoch.
@@ -86,8 +82,7 @@ impl ConsensusBank {
                     as u64
             } else if delegation.deactivation_epoch == epoch {
                 // Cooling down — u128 intermediate to prevent overflow
-                (delegation.stake as u128
-                    * (10_000 - delegation.warmup_cooldown_rate_bps) as u128
+                (delegation.stake as u128 * (10_000 - delegation.warmup_cooldown_rate_bps) as u128
                     / 10_000) as u64
             } else {
                 delegation.stake
@@ -114,12 +109,15 @@ impl ConsensusBank {
             }
         }
 
-        // Atomic swap of epoch_stakes and update cached vec
+        // Single atomic swap of all epoch stake data
         let validator_count = new_stakes.len();
         let cached_vec: Vec<(Hash, u64)> = new_stakes.iter().map(|(&k, &v)| (k, v)).collect();
-        *self.epoch_stakes.write() = new_stakes;
-        *self.total_active_stake.write() = total;
-        *self.cached_stake_vec.write() = Arc::new(cached_vec);
+        {
+            let mut state = self.epoch_stake_state.write();
+            state.epoch_stakes = new_stakes;
+            state.total_active_stake = total;
+            state.cached_stake_vec = Arc::new(cached_vec);
+        }
 
         metrics::gauge!("nusantara_bank_total_active_stake").set(total as f64);
         metrics::gauge!("nusantara_bank_epoch_stake_validators").set(validator_count as f64);

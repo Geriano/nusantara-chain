@@ -132,9 +132,11 @@ mod tests {
         let hash_b = hash(b"block_b");
 
         // First vote at slot 5
-        assert!(detector
-            .check_vote(&validator, 5, &hash_a, &reporter)
-            .is_none());
+        assert!(
+            detector
+                .check_vote(&validator, 5, &hash_a, &reporter)
+                .is_none()
+        );
 
         // Conflicting vote at slot 5
         let proof = detector
@@ -156,14 +158,18 @@ mod tests {
         let block_hash = hash(b"same_block");
 
         // Vote once
-        assert!(detector
-            .check_vote(&validator, 10, &block_hash, &reporter)
-            .is_none());
+        assert!(
+            detector
+                .check_vote(&validator, 10, &block_hash, &reporter)
+                .is_none()
+        );
 
         // Same vote again -- should not be flagged
-        assert!(detector
-            .check_vote(&validator, 10, &block_hash, &reporter)
-            .is_none());
+        assert!(
+            detector
+                .check_vote(&validator, 10, &block_hash, &reporter)
+                .is_none()
+        );
     }
 
     #[test]

@@ -41,7 +41,9 @@ impl ReplayStage {
                 let entries: Vec<(Hash, u64, Hash)> = poh_entries
                     .windows(2)
                     .map(|w| {
-                        let delta = w[1].num_hashes.checked_sub(w[0].num_hashes)
+                        let delta = w[1]
+                            .num_hashes
+                            .checked_sub(w[0].num_hashes)
                             .ok_or(ConsensusError::PohVerificationFailed { index: 0 })?;
                         Ok((w[0].hash, delta, w[1].hash))
                     })
@@ -57,10 +59,7 @@ impl ReplayStage {
                         Ok(results) => results.iter().all(|&r| r),
                         Err(_) => {
                             tracing::warn!("GPU verification failed, falling back to CPU");
-                            verify_poh_entries(
-                                &poh_entries[0].hash,
-                                &poh_entries[1..],
-                            )
+                            verify_poh_entries(&poh_entries[0].hash, &poh_entries[1..])
                         }
                     }
                 }
@@ -118,10 +117,14 @@ impl ReplayStage {
                                     .get_node(voted_slot)
                                     .map(|n| n.block_hash)
                                     .unwrap_or(vote.hash);
-                                self.commitment_tracker
-                                    .record_vote(voted_slot, voted_block_hash, stake);
+                                self.commitment_tracker.record_vote(
+                                    voted_slot,
+                                    voted_block_hash,
+                                    stake,
+                                );
                             }
-                            if let Some(root) = result.new_root_slot {
+                            // Mark ALL intermediate roots as finalized, not just the last
+                            for &root in &result.new_root_slots {
                                 new_root = Some(root);
                                 self.commitment_tracker.mark_finalized(root);
                             }

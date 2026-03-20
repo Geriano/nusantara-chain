@@ -84,10 +84,7 @@ impl GpuPohVerifier {
     /// Batch verify PoH entries on GPU.
     /// Each entry is (initial_hash, num_hashes, expected_hash).
     #[instrument(skip(self, entries), level = "debug")]
-    pub fn verify_batch(
-        &self,
-        entries: &[(Hash, u64, Hash)],
-    ) -> Result<Vec<bool>, ConsensusError> {
+    pub fn verify_batch(&self, entries: &[(Hash, u64, Hash)]) -> Result<Vec<bool>, ConsensusError> {
         if entries.is_empty() {
             return Ok(Vec::new());
         }
@@ -114,11 +111,13 @@ impl GpuPohVerifier {
             })
             .collect();
 
-        let entry_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Entry Buffer"),
-            contents: bytemuck::cast_slice(&gpu_entries),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let entry_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Entry Buffer"),
+                contents: bytemuck::cast_slice(&gpu_entries),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         let result_size = (entries.len() * std::mem::size_of::<u32>()) as u64;
         let result_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -186,7 +185,8 @@ impl GpuPohVerifier {
         let results: &[u32] = bytemuck::cast_slice(&data);
         let bool_results: Vec<bool> = results.iter().map(|&r| r == 1).collect();
 
-        metrics::counter!("nusantara_gpu_poh_entries_verified_total").increment(entries.len() as u64);
+        metrics::counter!("nusantara_gpu_poh_entries_verified_total")
+            .increment(entries.len() as u64);
 
         Ok(bool_results)
     }

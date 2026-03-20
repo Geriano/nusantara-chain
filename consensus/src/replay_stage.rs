@@ -106,7 +106,7 @@ impl ReplayStage {
                     match self.replay_block(&block, &poh_entries) {
                         Ok(result) => {
                             // In standalone run() mode, always advance root
-                            if let Some(root) = result.new_root
+                            if let Some(&root) = result.new_root.as_ref()
                                 && let Err(e) = self.advance_root(root)
                             {
                                 tracing::warn!(?e, root, "root advancement failed");

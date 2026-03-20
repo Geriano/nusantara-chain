@@ -25,10 +25,7 @@ pub(crate) fn extract_vote_from_transaction(
     let voter = *tx.message.account_keys.first()?;
 
     for ix in &tx.message.instructions {
-        let program_id = tx
-            .message
-            .account_keys
-            .get(ix.program_id_index as usize)?;
+        let program_id = tx.message.account_keys.get(ix.program_id_index as usize)?;
         if *program_id == *VOTE_PROGRAM_ID
             && let Ok(vote_ix) = borsh::from_slice::<VoteInstruction>(&ix.data)
         {

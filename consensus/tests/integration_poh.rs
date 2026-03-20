@@ -1,6 +1,6 @@
-use nusantara_consensus::poh::{PohRecorder, HASHES_PER_TICK, TICKS_PER_SLOT, verify_poh_entries};
 use nusantara_consensus::gpu::GpuPohVerifier;
-use nusantara_crypto::{hash, Hash};
+use nusantara_consensus::poh::{HASHES_PER_TICK, PohRecorder, TICKS_PER_SLOT, verify_poh_entries};
+use nusantara_crypto::{Hash, hash};
 
 #[test]
 fn test_poh_produce_and_verify_full_slot() {

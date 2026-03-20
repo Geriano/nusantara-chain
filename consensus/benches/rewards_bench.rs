@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nusantara_consensus::rewards::RewardsCalculator;
-use nusantara_crypto::{hash, Hash};
+use nusantara_crypto::{Hash, hash};
 use nusantara_stake_program::Delegation;
 use nusantara_vote_program::{VoteInit, VoteState};
 
@@ -85,8 +85,13 @@ fn rewards_point_calculation(c: &mut Criterion) {
 
     c.bench_function("rewards_100k_delegations", |b| {
         b.iter(|| {
-            RewardsCalculator::calculate_epoch_rewards(1, 1_000_000_000, &vote_states, &delegations)
-                .unwrap();
+            RewardsCalculator::calculate_epoch_rewards(
+                1,
+                1_000_000_000,
+                &vote_states,
+                &delegations,
+            )
+            .unwrap();
         });
     });
 }

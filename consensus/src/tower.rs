@@ -13,7 +13,10 @@ pub const SWITCH_THRESHOLD_PERCENTAGE: u64 =
 pub const MAX_LOCKOUT_HISTORY: u64 = const_parse_u64(env!("NUSA_TOWER_MAX_LOCKOUT_HISTORY"));
 
 pub struct TowerVoteResult {
-    pub new_root_slot: Option<u64>,
+    /// All slots that became roots during this vote (oldest to newest).
+    /// Previously `Option<u64>` which lost intermediate roots when multiple
+    /// votes crossed MAX_LOCKOUT_HISTORY confirmations in a single round.
+    pub new_root_slots: Vec<u64>,
     pub expired_lockouts: Vec<Lockout>,
     pub updated_vote_state: VoteState,
 }
@@ -43,13 +46,10 @@ impl Tower {
     /// 4. If bottom vote reaches MAX_LOCKOUT_HISTORY confirmations -> becomes root
     #[instrument(skip(self, vote), level = "debug")]
     pub fn process_vote(&mut self, vote: &Vote) -> Result<TowerVoteResult, ConsensusError> {
-        let vote_slot = *vote
-            .slots
-            .last()
-            .ok_or(ConsensusError::VoteTooOld {
-                vote_slot: 0,
-                root_slot: self.vote_state.root_slot.unwrap_or(0),
-            })?;
+        let vote_slot = *vote.slots.last().ok_or(ConsensusError::VoteTooOld {
+            vote_slot: 0,
+            root_slot: self.vote_state.root_slot.unwrap_or(0),
+        })?;
 
         // Check vote is not at or before root
         if let Some(root) = self.vote_state.root_slot
@@ -90,24 +90,38 @@ impl Tower {
             }
         }
 
-        // 4. Check if bottom vote reached MAX_LOCKOUT_HISTORY -> becomes root
-        let mut new_root = None;
-        let root_count = self.vote_state.votes.iter()
+        // 4. Check if bottom votes reached MAX_LOCKOUT_HISTORY -> become roots
+        // Collect ALL rooted slots (not just the last one) so callers can
+        // mark each intermediate root as finalized.
+        let root_count = self
+            .vote_state
+            .votes
+            .iter()
             .take_while(|v| v.confirmation_count >= MAX_LOCKOUT_HISTORY as u32)
             .count();
-        if root_count > 0 {
-            let last_rooted = self.vote_state.votes.drain(..root_count).next_back().unwrap();
-            new_root = Some(last_rooted.slot);
-            self.vote_state.root_slot = Some(last_rooted.slot);
-        }
+        let new_root_slots: Vec<u64> = if root_count > 0 {
+            let rooted: Vec<u64> = self
+                .vote_state
+                .votes
+                .drain(..root_count)
+                .map(|l| l.slot)
+                .collect();
+            // The last rooted slot becomes the new root_slot (highest)
+            if let Some(&last) = rooted.last() {
+                self.vote_state.root_slot = Some(last);
+            }
+            rooted
+        } else {
+            Vec::new()
+        };
 
         metrics::counter!("nusantara_tower_votes_processed_total").increment(1);
-        if new_root.is_some() {
+        if !new_root_slots.is_empty() {
             metrics::counter!("nusantara_tower_roots_advanced_total").increment(1);
         }
 
         Ok(TowerVoteResult {
-            new_root_slot: new_root,
+            new_root_slots,
             expired_lockouts: expired,
             updated_vote_state: self.vote_state.clone(),
         })
@@ -140,7 +154,8 @@ impl Tower {
 
         // Sum all stake on the alternative fork
         let alternative_stake: u64 = voted_stakes.iter().map(|(_, s)| *s).sum();
-        let pct = alternative_stake * 100 / total_stake;
+        // Use u128 intermediate to prevent overflow when alternative_stake > u64::MAX / 100
+        let pct = (alternative_stake as u128 * 100 / total_stake as u128) as u64;
         pct >= SWITCH_THRESHOLD_PERCENTAGE
     }
 
@@ -186,7 +201,7 @@ mod tests {
     fn single_vote() {
         let mut tower = make_tower();
         let result = tower.process_vote(&make_vote(1)).unwrap();
-        assert!(result.new_root_slot.is_none());
+        assert!(result.new_root_slots.is_empty());
         assert_eq!(tower.depth(), 1);
         assert_eq!(tower.vote_state().votes[0].slot, 1);
     }
@@ -215,7 +230,7 @@ mod tests {
 
         // After MAX_LOCKOUT_HISTORY votes, the first vote should become root
         let result = last_result.unwrap();
-        assert_eq!(result.new_root_slot, Some(1));
+        assert_eq!(result.new_root_slots, vec![1]);
         assert_eq!(tower.root_slot(), Some(1));
     }
 
@@ -252,6 +267,23 @@ mod tests {
 
         let stakes = vec![(hash(b"v1"), 30)];
         assert!(!tower.check_switch_threshold(10, &stakes, 100));
+    }
+
+    #[test]
+    fn switch_threshold_large_stake_no_overflow() {
+        let tower = make_tower();
+        // alternative_stake > u64::MAX / 100 would overflow with naive multiplication
+        let large_stake = u64::MAX / 50; // ~3.7e17
+        let total_stake = u64::MAX / 10;
+        let stakes = vec![(hash(b"v1"), large_stake)];
+        // large_stake / total_stake = (MAX/50) / (MAX/10) = 10/50 = 20%
+        // 20% < 38% threshold, should return false
+        assert!(!tower.check_switch_threshold(10, &stakes, total_stake));
+
+        // Now with enough stake: 50% > 38%
+        let half_stake = total_stake / 2;
+        let stakes_half = vec![(hash(b"v1"), half_stake)];
+        assert!(tower.check_switch_threshold(10, &stakes_half, total_stake));
     }
 
     #[test]

@@ -74,15 +74,11 @@ fn fork_tree_compute_best(c: &mut Criterion) {
             tree.add_vote(base_slot + 9, (fork + 1) * 100);
         }
 
-        group.bench_with_input(
-            BenchmarkId::new("forks", num_forks),
-            &num_forks,
-            |b, _| {
-                b.iter(|| {
-                    tree.compute_best_fork();
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("forks", num_forks), &num_forks, |b, _| {
+            b.iter(|| {
+                tree.compute_best_fork();
+            });
+        });
     }
     group.finish();
 }
